@@ -109,12 +109,61 @@ export const effectSchema = z.object({
 export type Effect = z.infer<typeof effectSchema>;
 
 // ---------------------------------------------------------------------------
+// M1 — the parchment message effect (the first concrete effect type)
+// ---------------------------------------------------------------------------
+
+/** How a message behaves on the player's screen (see docs/DESIGN.md). */
+export const messageMode = z.enum(["acknowledge", "auto_dismiss", "silent"]);
+export type MessageMode = z.infer<typeof messageMode>;
+
+/** What the GM sends. */
+export const sendMessageRequestSchema = z.object({
+  target: targetSchema,
+  body: z.string().min(1).max(1000),
+  mode: messageMode,
+  /** auto_dismiss only: how long the parchment lingers before it refolds. */
+  autoDismissMs: z.number().int().positive().max(120_000).optional(),
+});
+export type SendMessageRequest = z.infer<typeof sendMessageRequestSchema>;
+
+/** A concrete effect instance delivered to a player. */
+export const messageEffectSchema = z.object({
+  id: z.string().uuid(),
+  kind: z.literal("message"),
+  body: z.string(),
+  mode: messageMode,
+  autoDismissMs: z.number().int().positive().optional(),
+  createdAt: z.string().datetime(),
+});
+export type MessageEffect = z.infer<typeof messageEffectSchema>;
+
+/** Union of effect instances delivered to players (only "message" in M1). */
+export const deliveredEffectSchema = z.discriminatedUnion("kind", [
+  messageEffectSchema,
+]);
+export type DeliveredEffect = z.infer<typeof deliveredEffectSchema>;
+
+export const sendEffectResultSchema = z.discriminatedUnion("ok", [
+  z.object({
+    ok: z.literal(true),
+    effectId: z.string().uuid(),
+    deliveredTo: z.number().int().nonnegative(),
+  }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+]);
+export type SendEffectResult = z.infer<typeof sendEffectResultSchema>;
+
+// ---------------------------------------------------------------------------
 // Socket.IO event maps (typed on both ends)
 // ---------------------------------------------------------------------------
 
 export interface ServerToClientEvents {
   "presence:update": (update: PresenceUpdate) => void;
   "server:error": (message: string) => void;
+  /** Server pushes a concrete effect to a player (M1+). */
+  "effect:deliver": (effect: DeliveredEffect) => void;
+  /** Server notifies the GM that a player acknowledged an effect. */
+  "effect:acked": (info: { effectId: string; playerId: string }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -130,6 +179,13 @@ export interface ClientToServerEvents {
     req: OpenCircleRequest,
     ack: (result: OpenCircleResult) => void,
   ) => void;
+  /** GM sends an effect (M1: a parchment message) to a target. */
+  "effect:send": (
+    req: SendMessageRequest,
+    ack: (result: SendEffectResult) => void,
+  ) => void;
+  /** Player acknowledges an effect (acknowledge mode). */
+  "effect:ack": (info: { effectId: string }) => void;
 }
 
 export const DEFAULT_SERVER_PORT = 3001;

@@ -15,7 +15,8 @@
     "lint": "turbo run lint",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
-    "smoke:m0": "node scripts/smoke-m0.mjs"
+    "smoke:m0": "node scripts/smoke-m0.mjs",
+    "smoke:m1": "node scripts/smoke-m1.mjs"
   },
   "devDependencies": {
     "socket.io-client": "^4.8.1",

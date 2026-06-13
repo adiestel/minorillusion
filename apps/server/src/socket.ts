@@ -4,10 +4,12 @@ import {
   createCircleRequestSchema,
   joinRequestSchema,
   openCircleRequestSchema,
+  sendMessageRequestSchema,
   type ClientToServerEvents,
   type ServerToClientEvents,
 } from "@minorillusion/contract";
 import { CircleService } from "./circles.js";
+import { buildMessageEffect, resolveTargets } from "./effects.js";
 
 /**
  * Typed Socket.IO server for the M0 realtime core. Rooms map 1:1 to circle ids;
@@ -41,10 +43,29 @@ export function createSocketServer(
   // socket.id -> binding. Removed on disconnect.
   const bindings = new Map<string, SocketState>();
 
+  // effectId -> the GM socket.id that sent it, so a player's ack can be routed
+  // back to the originating GM. Entries are cleaned up on GM disconnect.
+  const effectSenders = new Map<string, string>();
+
   /** Broadcast the current roster of a circle to everyone in its room. */
   async function broadcastPresence(circleId: string): Promise<void> {
     const players = await service.presence(circleId);
     io.to(circleId).emit("presence:update", { circleId, players });
+  }
+
+  /**
+   * The players (playerId -> socket) currently connected in a circle, derived
+   * from the live socket bindings — this is the router's "present" snapshot.
+   * A binding with a playerId is a player; one without is the GM.
+   */
+  function presentPlayerSockets(circleId: string): Map<string, AppSocket> {
+    const result = new Map<string, AppSocket>();
+    for (const [socketId, state] of bindings) {
+      if (state.circleId !== circleId || state.playerId === undefined) continue;
+      const playerSocket = io.sockets.sockets.get(socketId);
+      if (playerSocket) result.set(state.playerId, playerSocket);
+    }
+    return result;
   }
 
   io.on("connection", (socket: AppSocket) => {
@@ -114,16 +135,73 @@ export function createSocketServer(
       }
     });
 
+    // -- effect:send (GM) -> route a parchment message to its target(s). ------
+    socket.on("effect:send", (req, ack) => {
+      const parsed = sendMessageRequestSchema.safeParse(req);
+      if (!parsed.success) {
+        ack({ ok: false, error: "Invalid message request." });
+        return;
+      }
+      // Only a GM may send effects: bound to a circle, but not a player.
+      const state = bindings.get(socket.id);
+      if (!state || state.playerId !== undefined) {
+        ack({ ok: false, error: "Only a GM in a circle may send effects." });
+        return;
+      }
+
+      const effect = buildMessageEffect(parsed.data);
+      const present = presentPlayerSockets(state.circleId);
+      const recipientIds = resolveTargets(parsed.data.target, [
+        ...present.keys(),
+      ]);
+
+      let deliveredTo = 0;
+      for (const playerId of recipientIds) {
+        const playerSocket = present.get(playerId);
+        if (!playerSocket) continue;
+        playerSocket.emit("effect:deliver", effect);
+        deliveredTo++;
+      }
+
+      // Remember who sent this effect so a later ack can be routed home.
+      effectSenders.set(effect.id, socket.id);
+      ack({ ok: true, effectId: effect.id, deliveredTo });
+    });
+
+    // -- effect:ack (player) -> notify the originating GM of the ack. ---------
+    socket.on("effect:ack", (info) => {
+      const senderSocketId = effectSenders.get(info.effectId);
+      if (senderSocketId === undefined) return; // unknown/expired effect.
+      const state = bindings.get(socket.id);
+      if (!state?.playerId) return; // only a player can acknowledge.
+      const gmSocket = io.sockets.sockets.get(senderSocketId);
+      if (!gmSocket) return; // GM has gone away.
+      gmSocket.emit("effect:acked", {
+        effectId: info.effectId,
+        playerId: state.playerId,
+      });
+    });
+
     // -- disconnect -> if a joined player, mark offline + broadcast. ----------
     socket.on("disconnect", async () => {
       const state = bindings.get(socket.id);
       bindings.delete(socket.id);
-      if (!state?.playerId) return;
-      try {
-        await service.setConnected(state.playerId, false);
-        await broadcastPresence(state.circleId);
-      } catch (err) {
-        app.log.error({ err }, "disconnect cleanup failed");
+
+      // A player: mark offline + broadcast the thinned roster.
+      if (state?.playerId) {
+        try {
+          await service.setConnected(state.playerId, false);
+          await broadcastPresence(state.circleId);
+        } catch (err) {
+          app.log.error({ err }, "disconnect cleanup failed");
+        }
+        return;
+      }
+
+      // Otherwise a GM (or unbound socket): best-effort drop any effects this
+      // socket sent so the ack-router map doesn't leak entries for a gone GM.
+      for (const [effectId, senderId] of effectSenders) {
+        if (senderId === socket.id) effectSenders.delete(effectId);
       }
     });
   });

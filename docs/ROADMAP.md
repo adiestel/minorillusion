@@ -4,7 +4,7 @@
 Sequenced to de-risk: a thin slice runs end-to-end early (tracer bullet), the cheap-path "wow" lands before the GPU complexity, native/device testing starts as soon as a native capability appears, and the hardest external dependencies come last. **Claude implements, user reviews — working code, milestone by milestone.**
 
 ## Current status
-**M0 complete.** ✓ Monorepo + `contract` + server (Socket.IO + Drizzle/Postgres) + `gm-web` + `player` all working. The join → live-presence spine runs end-to-end and persists to Postgres; 21 unit tests (contract 7, server 14) + the `scripts/smoke-m0.mjs` e2e smoke test pass. **Next action: M1 — the parchment-message tracer bullet.**
+**M1 complete.** ✓ The full actor→router→target effect pipeline works: the GM sends a parchment message (acknowledge / auto_dismiss / silent) to a target or broadcast; the player renders it as ink-on-parchment (burn-to-ash acknowledge, refold auto-dismiss, silent ember-glow) and acks back to the GM. 30 unit tests pass (contract 7, server 23); `scripts/smoke-m1.mjs` + `smoke-m0.mjs` pass end-to-end. **Next action: M2 — effect engine + cheap-path core effects (audio/TTS, haptics, ember, storm-via-video, heartbeat) + GM soundboard. ← native capabilities + physical-device testing begin here.**
 
 ## Milestones
 
@@ -12,7 +12,7 @@ Sequenced to de-risk: a thin slice runs end-to-end early (tracer bullet), the ch
 Monorepo, `contract` + `design-system`, the three app shells (Capacitor included), Postgres via Drizzle.
 **Definition of done:** `docker compose up` + `pnpm dev` → server `/health`, both apps open in the browser, a player enters a 6-digit code → the server creates/looks up the circle in Postgres → player and GM see **live presence** over Socket.IO. Plus one early **run-on-a-real-phone smoke test** to flush out the native build/signing setup while stakes are trivial.
 
-### M1 — Tracer bullet
+### M1 — Tracer bullet — ✓ DONE
 The GM pushes a **parchment message** to a target or broadcast, with **acknowledge / auto-dismiss / silent**.
 **Proves:** the entire actor→router→target pipeline + the design language + the message-type system, in one minimal slice.
 

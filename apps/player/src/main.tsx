@@ -15,12 +15,14 @@ import {
   useState,
   useEffect,
   useCallback,
+  useRef,
   CSSProperties,
 } from "react";
 import { createRoot } from "react-dom/client";
 
-import type { JoinResult, PresenceUpdate, Player } from "@minorillusion/contract";
+import type { JoinResult, PresenceUpdate, Player, DeliveredEffect, MessageEffect } from "@minorillusion/contract";
 import { playerTheme, themeVars, palette, space } from "@minorillusion/design-system";
+import { ParchmentMessage } from "./ParchmentMessage";
 
 import { socket } from "./socket";
 import { deviceId } from "./deviceId";
@@ -414,7 +416,61 @@ type AppState =
 function App() {
   const [appState, setAppState] = useState<AppState>({ screen: "join" });
 
-  // Listen for presence updates after joining
+  // ---------------------------------------------------------------------------
+  // Parchment message queue — M1 effect:deliver handling
+  // ---------------------------------------------------------------------------
+
+  // Queue of MessageEffect instances waiting to be shown.
+  const [messageQueue, setMessageQueue] = useState<MessageEffect[]>([]);
+  // The currently-displayed effect (head of queue), null when nothing active.
+  const [activeMessage, setActiveMessage] = useState<MessageEffect | null>(null);
+  // Ref to avoid stale closures in the socket handler.
+  const activeMessageRef = useRef<MessageEffect | null>(null);
+  activeMessageRef.current = activeMessage;
+
+  // Receive an incoming effect and enqueue or display immediately.
+  const handleEffectDeliver = useCallback((effect: DeliveredEffect) => {
+    // M1 only handles MessageEffect (kind === "message").
+    // The discriminated union currently only has "message", but guard anyway.
+    if (effect.kind !== "message") return;
+    const msg = effect as MessageEffect;
+
+    if (activeMessageRef.current === null) {
+      // Nothing on screen — show immediately.
+      setActiveMessage(msg);
+    } else {
+      // Queue behind whatever is currently displayed.
+      setMessageQueue((q) => [...q, msg]);
+    }
+  }, []);
+
+  // Called by ParchmentMessage when the current message fully exits.
+  const handleMessageDone = useCallback(() => {
+    setActiveMessage(null);
+    setMessageQueue((q) => {
+      const [next, ...rest] = q;
+      if (next !== undefined) {
+        // Promote head of queue in the next tick so the component unmounts
+        // cleanly first.
+        setTimeout(() => setActiveMessage(next), 0);
+      }
+      return rest;
+    });
+  }, []);
+
+  // Listen for effect:deliver (always, not just when joined — the server won't
+  // deliver to a socket that hasn't joined a circle, so this is safe).
+  useEffect(() => {
+    socket.on("effect:deliver", handleEffectDeliver);
+    return () => {
+      socket.off("effect:deliver", handleEffectDeliver);
+    };
+  }, [handleEffectDeliver]);
+
+  // ---------------------------------------------------------------------------
+  // Presence updates
+  // ---------------------------------------------------------------------------
+
   useEffect(() => {
     function onPresenceUpdate(update: PresenceUpdate) {
       setAppState((prev) => {
@@ -448,11 +504,24 @@ function App() {
     [],
   );
 
-  if (appState.screen === "joined") {
-    return <JoinedScreen state={appState.joined} />;
-  }
+  return (
+    <>
+      {appState.screen === "joined" ? (
+        <JoinedScreen state={appState.joined} />
+      ) : (
+        <JoinScreen onJoined={handleJoined} />
+      )}
 
-  return <JoinScreen onJoined={handleJoined} />;
+      {/* Parchment overlay — rendered above everything, portalled via fixed positioning */}
+      {activeMessage !== null && (
+        <ParchmentMessage
+          key={activeMessage.id}
+          effect={activeMessage}
+          onDone={handleMessageDone}
+        />
+      )}
+    </>
+  );
 }
 
 // ---------------------------------------------------------------------------

@@ -19,6 +19,7 @@ import type {
 } from "@minorillusion/contract";
 import { gmTheme, palette, radius, space, themeVars } from "@minorillusion/design-system";
 import { socket } from "./socket";
+import { MessageComposer } from "./MessageComposer";
 
 // ---------------------------------------------------------------------------
 // State
@@ -287,6 +288,11 @@ function CirclePanel({ circle, players }: CirclePanelProps) {
           </ul>
         )}
       </section>
+
+      <Divider />
+
+      {/* M1 — message composer */}
+      <MessageComposer players={players} />
     </div>
   );
 }
