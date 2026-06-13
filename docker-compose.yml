@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: minorillusion-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: minorillusion
+      POSTGRES_PASSWORD: localdev
+      POSTGRES_DB: minorillusion
+    ports:
+      - "5432:5432"
+    volumes:
+      - minorillusion-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U minorillusion"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  minorillusion-pgdata:

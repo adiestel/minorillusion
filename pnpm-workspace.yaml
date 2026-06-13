@@ -1,0 +1,10 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# esbuild's postinstall places its platform binary; Vite/tsx/Vitest depend on it.
+allowBuilds:
+  esbuild: true
+
+onlyBuiltDependencies:
+  - esbuild

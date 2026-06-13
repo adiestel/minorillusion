@@ -4,11 +4,11 @@
 Sequenced to de-risk: a thin slice runs end-to-end early (tracer bullet), the cheap-path "wow" lands before the GPU complexity, native/device testing starts as soon as a native capability appears, and the hardest external dependencies come last. **Claude implements, user reviews — working code, milestone by milestone.**
 
 ## Current status
-**Pre-M0.** Design + spec complete (this `docs/` set). No app code yet. **Next action: scaffold M0.**
+**M0 complete.** ✓ Monorepo + `contract` + server (Socket.IO + Drizzle/Postgres) + `gm-web` + `player` all working. The join → live-presence spine runs end-to-end and persists to Postgres; 21 unit tests (contract 7, server 14) + the `scripts/smoke-m0.mjs` e2e smoke test pass. **Next action: M1 — the parchment-message tracer bullet.**
 
 ## Milestones
 
-### M0 — Scaffold + spine
+### M0 — Scaffold + spine — ✓ DONE
 Monorepo, `contract` + `design-system`, the three app shells (Capacitor included), Postgres via Drizzle.
 **Definition of done:** `docker compose up` + `pnpm dev` → server `/health`, both apps open in the browser, a player enters a 6-digit code → the server creates/looks up the circle in Postgres → player and GM see **live presence** over Socket.IO. Plus one early **run-on-a-real-phone smoke test** to flush out the native build/signing setup while stakes are trivial.
 
