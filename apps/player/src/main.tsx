@@ -507,7 +507,14 @@ function App() {
     (
       id: string,
       data: string,
-      o: { whispers: boolean; echo: boolean; pan: boolean; gain?: number; whisperGain?: number },
+      o: {
+        whispers: boolean;
+        echo: boolean;
+        distortion: boolean;
+        pan: boolean;
+        gain?: number;
+        whisperGain?: number;
+      },
     ) => {
       const bed = o.whispers
         ? audio.playWhisperBed({ gain: o.whisperGain ?? 0.4, fadeInMs: 2000, fadeOutMs: 2000 })
@@ -518,6 +525,7 @@ function App() {
         voice = audio.playVoice(data, {
           gain: o.gain,
           echo: o.echo,
+          distortion: o.distortion,
           pan: o.pan,
           onEnded: () => {
             bed?.stop(); // fade the bed out 2s after the voice finishes
@@ -547,12 +555,16 @@ function App() {
           // orchestrated specially; everything else is plain playback.
           const isSpooky =
             effect.source.via === "data" &&
-            (effect.whispers === true || effect.echo === true || effect.pan === true);
+            (effect.whispers === true ||
+              effect.echo === true ||
+              effect.distortion === true ||
+              effect.pan === true);
           scheduleEffect(effect.startDelayMs, () => {
             if (isSpooky && effect.source.via === "data") {
               playSpookyVoice(effect.id, effect.source.data, {
                 whispers: effect.whispers === true,
                 echo: effect.echo === true,
+                distortion: effect.distortion === true,
                 pan: effect.pan === true,
                 gain: effect.gain,
                 whisperGain: effect.whisperGain,

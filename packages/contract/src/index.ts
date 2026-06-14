@@ -237,6 +237,7 @@ export type AudioSourceSpec = z.infer<typeof audioSourceSpecSchema>;
 const voiceFxFields = {
   whispers: z.boolean().optional(),
   echo: z.boolean().optional(),
+  distortion: z.boolean().optional(),
   pan: z.boolean().optional(),
   whisperGain: z.number().min(0).max(1).optional(),
 };

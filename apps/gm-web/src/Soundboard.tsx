@@ -99,9 +99,12 @@ export function Soundboard({ players }: SoundboardProps) {
 
   // --- TTS row ---
   const [ttsText, setTtsText] = useState("");
-  // Spooky-voice treatment: a dissonant-whispers bed + echo + L↔R pan, with
-  // independent voice / whisper levels.
-  const [whisperVoice, setWhisperVoice] = useState(false);
+  // Spooky-voice treatment — independent toggles so e.g. echo + distortion can
+  // run WITHOUT the whispers bed. Independent voice / whisper levels.
+  const [fxBed, setFxBed] = useState(false);
+  const [fxEcho, setFxEcho] = useState(true);
+  const [fxDistortion, setFxDistortion] = useState(true);
+  const [fxPan, setFxPan] = useState(true);
   const [voiceVol, setVoiceVol] = useState(0.9);
   const [whisperVol, setWhisperVol] = useState(0.4);
 
@@ -190,10 +193,11 @@ export function Soundboard({ players }: SoundboardProps) {
       kind: "audio",
       source: { via: "tts", text },
       gain: voiceVol,
-      // When the whispers treatment is on: wrap in the bed + echo + L↔R pan.
-      ...(whisperVoice
-        ? { whispers: true, echo: true, pan: true, whisperGain: whisperVol }
-        : {}),
+      // Independent treatment toggles (any subset).
+      ...(fxBed ? { whispers: true, whisperGain: whisperVol } : {}),
+      ...(fxEcho ? { echo: true } : {}),
+      ...(fxDistortion ? { distortion: true } : {}),
+      ...(fxPan ? { pan: true } : {}),
     };
     const req: SendEffectRequest = { target: buildTarget(), spec };
     socket.emit("effect:send", req, (result: SendEffectResult) => {
@@ -329,41 +333,27 @@ export function Soundboard({ players }: SoundboardProps) {
           </button>
         </div>
 
-        {/* Dissonant-whispers treatment for the voice */}
-        <label
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: space(2),
-            marginTop: space(2),
-            fontSize: "0.85rem",
-            color: "var(--text-dim)",
-            cursor: "pointer",
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={whisperVoice}
-            onChange={(e) => setWhisperVoice(e.target.checked)}
-            style={{ accentColor: palette.ember, cursor: "pointer" }}
-          />
-          Dissonant whispers (bed + echo + drifting pan)
-        </label>
+        {/* Voice FX — independent toggles (any subset) */}
+        <label style={{ ...labelStyle, marginTop: space(3) }}>Voice FX</label>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: space(2) }}>
+          <ToggleButton active={fxBed} onClick={() => setFxBed((v) => !v)}>
+            Whispers bed
+          </ToggleButton>
+          <ToggleButton active={fxEcho} onClick={() => setFxEcho((v) => !v)}>
+            Echo
+          </ToggleButton>
+          <ToggleButton active={fxDistortion} onClick={() => setFxDistortion((v) => !v)}>
+            Distortion
+          </ToggleButton>
+          <ToggleButton active={fxPan} onClick={() => setFxPan((v) => !v)}>
+            Pan
+          </ToggleButton>
+        </div>
 
-        {whisperVoice && (
-          <div style={{ display: "flex", flexDirection: "column", gap: space(2), marginTop: space(1) }}>
-            <VolumeSlider
-              label="Voice"
-              value={voiceVol}
-              onChange={setVoiceVol}
-            />
-            <VolumeSlider
-              label="Whispers"
-              value={whisperVol}
-              onChange={setWhisperVol}
-            />
-          </div>
-        )}
+        <div style={{ display: "flex", flexDirection: "column", gap: space(2), marginTop: space(2) }}>
+          <VolumeSlider label="Voice" value={voiceVol} onChange={setVoiceVol} />
+          {fxBed && <VolumeSlider label="Whispers" value={whisperVol} onChange={setWhisperVol} />}
+        </div>
       </div>
 
       {/* Transient status line */}

@@ -87,10 +87,24 @@ export interface VoiceOptions {
   gain?: number;
   /** Add a feedback echo. */
   echo?: boolean;
+  /** Grit + a hollow band-pass — a degraded, unnatural timbre. */
+  distortion?: boolean;
   /** Slowly sweep the voice L↔R. */
   pan?: boolean;
   /** Called when the voice finishes (or fails to play). */
   onEnded?: () => void;
+}
+
+/** A soft-clip overdrive curve for the distortion waveshaper. */
+function makeDistortionCurve(amount: number): Float32Array<ArrayBuffer> {
+  const n = 1024;
+  const curve = new Float32Array(new ArrayBuffer(n * 4));
+  const k = amount;
+  for (let i = 0; i < n; i++) {
+    const x = (i * 2) / n - 1;
+    curve[i] = ((3 + k) * x * 20 * (Math.PI / 180)) / (Math.PI + k * Math.abs(x));
+  }
+  return curve;
 }
 
 interface AudioCapability {
@@ -522,19 +536,42 @@ class WebAudio implements AudioCapability {
         voice.gain.value = opts.gain ?? 1;
         node.connect(voice);
 
-        // Echo: a feedback delay mixed with the dry signal.
         let tail: AudioNode = voice;
         const extra: AudioNode[] = [voice];
+
+        // Distortion: a soft-clip waveshaper into a hollow band-pass — grit + a
+        // disembodied, radio-from-elsewhere timbre.
+        if (opts.distortion) {
+          const shaper = ctx.createWaveShaper();
+          shaper.curve = makeDistortionCurve(9);
+          shaper.oversample = "2x";
+          const band = ctx.createBiquadFilter();
+          band.type = "bandpass";
+          band.frequency.value = 1500;
+          band.Q.value = 0.9;
+          // Tame the post-shaper level so distortion doesn't blare.
+          const trim = ctx.createGain();
+          trim.gain.value = 0.7;
+          tail.connect(shaper);
+          shaper.connect(band);
+          band.connect(trim);
+          tail = trim;
+          extra.push(shaper, band, trim);
+        }
+
+        // Echo: a feedback delay mixed with the dry signal (operates on whatever
+        // `tail` currently is — the distorted signal when distortion is on).
         if (opts.echo) {
+          const src = tail;
           const merge = ctx.createGain();
-          voice.connect(merge); // dry
+          src.connect(merge); // dry
           const delay = ctx.createDelay(1.0);
           delay.delayTime.value = 0.28;
           const fb = ctx.createGain();
           fb.gain.value = 0.34;
           const wet = ctx.createGain();
           wet.gain.value = 0.55;
-          voice.connect(delay);
+          src.connect(delay);
           delay.connect(fb);
           fb.connect(delay); // feedback loop
           delay.connect(wet);

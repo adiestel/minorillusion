@@ -83,6 +83,7 @@ export async function buildEffect(
       // Spooky-voice treatment carried through verbatim (player applies it).
       if (spec.whispers !== undefined) effect.whispers = spec.whispers;
       if (spec.echo !== undefined) effect.echo = spec.echo;
+      if (spec.distortion !== undefined) effect.distortion = spec.distortion;
       if (spec.pan !== undefined) effect.pan = spec.pan;
       if (spec.whisperGain !== undefined) effect.whisperGain = spec.whisperGain;
       if (opts?.startDelayMs !== undefined) effect.startDelayMs = opts.startDelayMs;
