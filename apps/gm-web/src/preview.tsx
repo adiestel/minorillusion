@@ -1,25 +1,22 @@
 /**
- * GM Stage preview — an offscreen harness for eyeballing the live-canvas visuals
- * (the draggable phone tiles, scene backdrops, lightning flash, pips, message
- * strip, and the table ring) WITHOUT a running circle. Renders the presentation-
- * only <StageCanvas> with mock players + scenes/transients, so no socket is used.
+ * GM Stage preview — an offscreen harness for eyeballing the live-canvas layout
+ * (the draggable phone tiles, sizing to each device's viewport, the table ring).
+ * Renders the presentation-only <StageCanvas> with mock players + scenes. Each
+ * tile is an <iframe> of the player mirror (/mirror.html), so the running player
+ * dev server is needed for the screens to populate.
  *
- *   http://localhost:5173/preview.html            → live demo (flashes/pips cycle)
- *   http://localhost:5173/preview.html?freeze=1   → a static frame (clean shot;
- *                                                    pauses animations + pins the
- *                                                    flash/pip/message visible)
+ *   http://localhost:5173/preview.html
  *
- * Mirrors apps/player/src/preview.tsx — a dev tool, never shipped to players.
+ * Mirrors apps/player/src/preview.tsx — a dev tool, never shipped.
  */
-import { StrictMode, useEffect, useState } from "react";
+import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { Player } from "@minorillusion/contract";
 import { gmTheme, palette, space, themeVars } from "@minorillusion/design-system";
-import { StageCanvas, type SceneMap, type TransientMap } from "./Stage";
+import { StageCanvas, type SceneMap } from "./Stage";
 
-// --- Theme: apply the GM CSS vars at :root so var(--text-dim) etc. resolve. ---
-const vars = themeVars(gmTheme);
-for (const [prop, value] of Object.entries(vars)) {
+// Apply the GM CSS vars at :root so var(--text-dim) etc. resolve.
+for (const [prop, value] of Object.entries(themeVars(gmTheme))) {
   document.documentElement.style.setProperty(prop, value);
 }
 document.body.style.margin = "0";
@@ -27,23 +24,7 @@ document.body.style.background = gmTheme.bg;
 document.body.style.color = gmTheme.text;
 document.body.style.fontFamily = gmTheme.font;
 
-const params = new URLSearchParams(location.search);
-const FREEZE = params.get("freeze") === "1";
-
-// In freeze mode, pause the looping rain and pin the otherwise-animated flash /
-// pip / message to a visible state, so a single screenshot shows everything.
-if (FREEZE) {
-  const s = document.createElement("style");
-  s.textContent = `
-    .mi-stage-rain { animation-play-state: paused !important; }
-    .mi-stage-flash { animation: none !important; opacity: 0.5 !important; }
-    .mi-stage-fade { animation: none !important; opacity: 1 !important; transform: none !important; }
-  `;
-  document.head.appendChild(s);
-}
-
-// --- Mock players (around a virtual table), with varied viewports so the demo
-//     shows real aspect ratios + relative size: phones, a tablet, a wide window.
+// Mock players with varied viewports (phones, a tablet, a wide window).
 function mk(
   id: string,
   name: string,
@@ -61,62 +42,27 @@ function mk(
 }
 
 const PLAYERS: Player[] = [
-  mk("p-aria", "Aria", { width: 390, height: 844 }), // tall phone
-  mk("p-bram", "Bram", { width: 414, height: 736 }), // shorter phone
-  mk("p-cole", "Cole", { width: 834, height: 1112 }), // tablet (bigger, squarer)
-  mk("p-dax", "Dax", { width: 1280, height: 720 }), // landscape window
-  mk("p-esa", "Esa", { width: 360, height: 800 }, false), // disconnected → dimmed
+  mk("p-aria", "Aria", { width: 390, height: 844 }),
+  mk("p-bram", "Bram", { width: 414, height: 736 }),
+  mk("p-cole", "Cole", { width: 834, height: 1112 }),
+  mk("p-dax", "Dax", { width: 1280, height: 720 }),
+  mk("p-esa", "Esa", { width: 360, height: 800 }, false), // disconnected → hidden
 ];
 
-// A representative opening frame: weather on three tiles, a strike + pips.
-const BASE_SCENES: SceneMap = {
+const SCENES: SceneMap = {
   "p-aria": "storm",
   "p-bram": "rain",
   "p-cole": "ember",
 };
 
-function makeTransients(now: number): TransientMap {
-  return {
-    "p-aria": { flash: { id: `f-${now}`, at: now } },
-    "p-bram": { pip: { id: `t-${now}`, icon: "♪", label: "Thunder", at: now } },
-    "p-cole": {
-      message: {
-        id: `m-${now}`,
-        text: "The embers flare — a shadow crosses the wall.",
-        mode: "acknowledge",
-        at: now,
-      },
-    },
-    "p-dax": { pip: { id: `h-${now}`, icon: "♥", label: "Heartbeat", at: now } },
-  };
-}
-
 function Preview() {
-  const [scenes] = useState<SceneMap>(BASE_SCENES);
-  const [transients, setTransients] = useState<TransientMap>(() =>
-    makeTransients(Date.now()),
-  );
-
-  // Live mode: re-fire flashes/pips every few seconds so the page feels alive.
-  useEffect(() => {
-    if (FREEZE) return;
-    const id = setInterval(() => {
-      setTransients(makeTransients(Date.now()));
-    }, 2600);
-    return () => clearInterval(id);
-  }, []);
-
+  const [scenes] = useState<SceneMap>(SCENES);
   return (
     <div style={{ maxWidth: 1040, margin: "0 auto", padding: space(6) }}>
       <p style={{ fontSize: "0.8rem", color: palette.parchmentDim, marginTop: 0 }}>
-        GM Stage preview {FREEZE ? "(frozen)" : "(live)"} — mock data, no circle
+        GM Stage preview — mock players; each screen is the live player mirror
       </p>
-      <StageCanvas
-        circleId="preview-circle"
-        players={PLAYERS}
-        sceneByPlayer={scenes}
-        transients={transients}
-      />
+      <StageCanvas circleId="preview-circle" players={PLAYERS} sceneByPlayer={scenes} />
     </div>
   );
 }
