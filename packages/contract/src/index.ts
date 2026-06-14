@@ -463,6 +463,14 @@ export const stopEffectResultSchema = z.object({ ok: z.boolean() });
 export type StopEffectResult = z.infer<typeof stopEffectResultSchema>;
 
 // ---------------------------------------------------------------------------
+// Mixer — the GM's live master effects volume (0..1), applied to every sound on
+// the player's output bus. Ephemeral: the GM sets it, present players apply it.
+// ---------------------------------------------------------------------------
+
+export const mixerSetSchema = z.object({ gain: z.number().min(0).max(1) });
+export type MixerSet = z.infer<typeof mixerSetSchema>;
+
+// ---------------------------------------------------------------------------
 // Effect mirror — a read-only copy of each delivered effect, fanned to the GM
 // so the GM's live Stage can render what every player is seeing (incl. the
 // server-driven storm strikes that never enter the registry). `playerIds` is
@@ -495,6 +503,8 @@ export interface ServerToClientEvents {
   "effect:mirror": (info: EffectMirror) => void;
   /** Server tells a player it was removed from the circle by the GM. */
   "circle:ejected": (info: { reason?: string }) => void;
+  /** Server applies the GM's master effects volume to a player. */
+  "mixer:apply": (info: MixerSet) => void;
 }
 
 export interface ClientToServerEvents {
@@ -534,6 +544,8 @@ export interface ClientToServerEvents {
     req: RemovePlayerRequest,
     ack: (result: RemovePlayerResult) => void,
   ) => void;
+  /** GM sets the master effects volume for the circle's players. */
+  "mixer:set": (req: MixerSet) => void;
   /** GM stops a sustained effect (or cancels a transient one early). */
   "effect:stop": (
     req: { effectId: string },

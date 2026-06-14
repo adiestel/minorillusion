@@ -678,6 +678,17 @@ function App() {
     };
   }, [handleEffectEnd]);
 
+  // Apply the GM's master effects volume (live).
+  useEffect(() => {
+    function onMixer({ gain }: { gain: number }) {
+      audio.setMasterGain(gain);
+    }
+    socket.on("mixer:apply", onMixer);
+    return () => {
+      socket.off("mixer:apply", onMixer);
+    };
+  }, []);
+
   // Clear any pending startDelayMs timers AND run any sustained cleanups
   // (standalone audio loops) on unmount, so nothing keeps playing into a
   // torn-down tree. (Ambiance cleanups are cheap setState no-ops at unmount.)

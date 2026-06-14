@@ -105,6 +105,8 @@ interface AudioCapability {
   playWhisperBed(opts?: WhisperBedOptions): AudioHandle;
   /** Play a spoken (data:) effect with optional echo + L↔R panning. */
   playVoice(dataUrl: string, opts?: VoiceOptions): AudioHandle;
+  /** Set the master effects volume (0..1) applied to all playback. */
+  setMasterGain(gain: number): void;
   /** True when audio is blocked by a suspended context (a gesture is needed). */
   locked(): boolean;
   /** Subscribe to lock-state changes; fires immediately with the current state.
@@ -152,6 +154,9 @@ class WebAudio implements AudioCapability {
   private readonly beds = new Set<{ stop: () => void }>();
   /** Decoded whisper clips, loaded once. */
   private whisperBuffers: Promise<AudioBuffer[]> | null = null;
+  /** Master effects bus — all playback routes through it (GM volume control). */
+  private masterGain: GainNode | null = null;
+  private masterLevel = 1;
 
   private ensureCtx(): AudioContext | null {
     if (this.ctx === null && AudioContextCtor !== undefined) {
@@ -162,6 +167,29 @@ class WebAudio implements AudioCapability {
       }
     }
     return this.ctx;
+  }
+
+  /** The shared output node everything connects to (the master effects bus). */
+  private output(): AudioNode {
+    const ctx = this.ctx;
+    if (ctx === null) throw new Error("no AudioContext");
+    if (this.masterGain === null) {
+      this.masterGain = ctx.createGain();
+      this.masterGain.gain.value = this.masterLevel;
+      this.masterGain.connect(ctx.destination);
+    }
+    return this.masterGain;
+  }
+
+  setMasterGain(gain: number): void {
+    this.masterLevel = Math.min(1, Math.max(0, gain));
+    const ctx = this.ctx;
+    if (this.masterGain !== null && ctx !== null) {
+      const now = ctx.currentTime;
+      this.masterGain.gain.cancelScheduledValues(now);
+      this.masterGain.gain.setValueAtTime(this.masterGain.gain.value, now);
+      this.masterGain.gain.linearRampToValueAtTime(this.masterLevel, now + 0.08);
+    }
   }
 
   unlock(): void {
@@ -254,7 +282,7 @@ class WebAudio implements AudioCapability {
         } else {
           gain.gain.setValueAtTime(targetGain, now);
         }
-        node.connect(gain).connect(ctx.destination);
+        node.connect(gain).connect(this.output());
         const entry: ActiveSource = { node, gain, fadeOutMs };
         node.onended = () => {
           this.active.delete(entry);
@@ -379,7 +407,7 @@ class WebAudio implements AudioCapability {
     const t0 = ctx.currentTime;
     master.gain.setValueAtTime(fadeInMs > 0 ? 0.0001 : bedGain, t0);
     if (fadeInMs > 0) master.gain.linearRampToValueAtTime(bedGain, t0 + fadeInMs / 1000);
-    master.connect(ctx.destination);
+    master.connect(this.output());
 
     const live = { stopped: false, timer: undefined as ReturnType<typeof setTimeout> | undefined };
     const nodes = new Set<AudioBufferSourceNode>();
@@ -526,10 +554,10 @@ class WebAudio implements AudioCapability {
           lfo.connect(depth).connect(panner.pan);
           lfo.start();
           tail.connect(panner);
-          panner.connect(ctx.destination);
+          panner.connect(this.output());
           extra.push(panner, depth);
         } else {
-          tail.connect(ctx.destination);
+          tail.connect(this.output());
         }
 
         state.cleanup = () => {

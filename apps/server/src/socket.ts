@@ -3,6 +3,7 @@ import { Server, type Socket } from "socket.io";
 import {
   createCircleRequestSchema,
   joinRequestSchema,
+  mixerSetSchema,
   openCircleRequestSchema,
   removePlayerRequestSchema,
   renamePlayerRequestSchema,
@@ -626,6 +627,17 @@ export function createSocketServer(
       state.viewport = parsed.data;
       // Re-broadcast so the GM Stage re-sizes this player's tile (player debounces).
       void broadcastPresence(state.circleId);
+    });
+
+    // -- mixer:set (GM) -> apply the master effects volume to present players. -
+    socket.on("mixer:set", (req) => {
+      const parsed = mixerSetSchema.safeParse(req);
+      if (!parsed.success) return;
+      const state = bindings.get(socket.id);
+      if (!state || state.playerId !== undefined) return; // GM only
+      for (const s of presentPlayerSockets(state.circleId).values()) {
+        s.emit("mixer:apply", { gain: parsed.data.gain });
+      }
     });
 
     // -- player:rename (GM) -> rename a player in this circle, refresh roster. --

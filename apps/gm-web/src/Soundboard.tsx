@@ -108,6 +108,13 @@ export function Soundboard({ players }: SoundboardProps) {
   // --- Fade interval for looping weather beds (seconds) ---
   const [fadeSeconds, setFadeSeconds] = useState(5);
 
+  // --- Master effects volume (live; broadcast to present players) ---
+  const [effectsVol, setEffectsVol] = useState(1);
+  function changeEffectsVol(v: number) {
+    setEffectsVol(v);
+    socket.emit("mixer:set", { gain: v });
+  }
+
   // --- Transient status ---
   const [status, setStatus] = useState<Status>(null);
   const statusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -236,6 +243,11 @@ export function Soundboard({ players }: SoundboardProps) {
             )}
           </div>
         )}
+      </div>
+
+      {/* Master effects volume — live, affects everything the players hear. */}
+      <div style={{ marginTop: space(5) }}>
+        <VolumeSlider label="Effects volume" value={effectsVol} onChange={changeEffectsVol} />
       </div>
 
       {/* Loops — sustained; stop them from the Active panel. */}

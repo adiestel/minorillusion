@@ -78,6 +78,12 @@ try {
     "GM presence carries the player's reported viewport (412x915)",
   );
 
+  // --- mixer: GM master effects volume reaches the player ----------------
+  const mixerApply = waitFor(player, "mixer:apply", (m) => m.gain === 0.5);
+  gm.emit("mixer:set", { gain: 0.5 });
+  const mixed = await mixerApply;
+  check(mixed.gain === 0.5, "GM mixer:set reaches the player as mixer:apply (0.5)");
+
   // --- audio cue (thunder), broadcast ------------------------------------
   let deliver = waitFor(player, "effect:deliver", (e) => e.kind === "audio");
   let send = await gm.timeout(5000).emitWithAck("effect:send", {
