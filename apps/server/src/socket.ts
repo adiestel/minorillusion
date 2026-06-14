@@ -67,6 +67,12 @@ interface ActiveEffectRecord {
   durationMs?: number;
   /** ambiance only: the running scene, surfaced so the GM Stage can paint it. */
   scene?: AmbianceScene;
+  /**
+   * The exact effect to re-deliver when a target (re)joins, so a refresh resumes
+   * the sound: a storm/rain ambiance, the whisper bed, a looping audio. Set for
+   * sustained effects only — transient effects are momentary and don't resume.
+   */
+  delivered?: DeliveredEffect;
   /** Transient effects: fires remove() when the effect auto-closes. */
   expireTimer?: ReturnType<typeof setTimeout>;
   /** Storm records: cancels the self-rescheduling strike runner. */
@@ -120,6 +126,8 @@ class ActiveEffectRegistry {
     if (classified.durationMs !== undefined) record.durationMs = classified.durationMs;
     // ambiance carries its scene so the GM Stage can paint each tile.
     if (effect.kind === "ambiance") record.scene = effect.scene;
+    // Sustained effects resume on (re)join: keep the delivered effect to re-send.
+    if (classified.sustained) record.delivered = effect;
 
     // Transient: auto-close after its duration (sustained effects need a stop).
     if (!classified.sustained && classified.durationMs !== undefined) {
@@ -143,20 +151,24 @@ class ActiveEffectRegistry {
     kind: string,
     label: string,
     target: Target,
+    /** The bed effect to re-deliver on (re)join so the ambience resumes. */
+    delivered?: DeliveredEffect,
   ): void {
     let circle = this.byCircle.get(circleId);
     if (!circle) {
       circle = new Map();
       this.byCircle.set(circleId, circle);
     }
-    circle.set(id, {
+    const record: ActiveEffectRecord = {
       id,
       kind,
       label,
       target,
       sustained: true,
       startedAt: new Date().toISOString(),
-    });
+    };
+    if (delivered) record.delivered = delivered;
+    circle.set(id, record);
     this.push(circleId);
   }
 
@@ -366,6 +378,28 @@ export function createSocketServer(
   }
 
   /**
+   * Re-deliver the circle's active sustained effects that target a given player —
+   * called when a player (re)joins so a refresh resumes the storm rain, the
+   * whisper bed, and any looping scene. The server-side strike/phrase runners
+   * already fire to whoever is present, so only the beds/scenes need re-sending;
+   * transient effects are momentary and aren't resumed. Re-delivering the same
+   * effect id keeps a later effect:end matching on the resumed player.
+   */
+  function resumeSustainedFor(
+    circleId: string,
+    playerId: string,
+    socket: AppSocket,
+  ): void {
+    for (const record of active.records(circleId)) {
+      if (!record.sustained || !record.delivered) continue;
+      // Resolve the target against just this player: present iff in-target.
+      if (resolveTargets(record.target, [playerId]).includes(playerId)) {
+        socket.emit("effect:deliver", record.delivered);
+      }
+    }
+  }
+
+  /**
    * Start a storm's strike runner for an active storm record. A self-
    * rescheduling timer: a first strike after 800–2000ms, then one every
    * 5000–12000ms. Each strike flashes everyone present in the storm's target,
@@ -569,6 +603,9 @@ export function createSocketServer(
           playerId: result.player.id,
         });
         ack(result);
+        // A (re)joining player resumes any sustained ambiance/bed targeting them
+        // (storm rain, whisper bed, looping audio) — a refresh restarts the sound.
+        resumeSustainedFor(result.circle.id, result.player.id, socket);
         await broadcastPresence(result.circle.id);
       } catch (err) {
         app.log.error({ err }, "circle:join failed");
@@ -792,8 +829,9 @@ export function createSocketServer(
         }
 
         // Register the sustained record (the GM Active panel shows "Whispers").
+        // The bed rides along so a (re)joining player resumes the ambience.
         const recordId = randomUUID();
-        active.registerRaw(state.circleId, recordId, "whisperscape", "Whispers", target);
+        active.registerRaw(state.circleId, recordId, "whisperscape", "Whispers", target, bed);
         const record = active.get(state.circleId, recordId);
         if (record) {
           startWhisperscape(state.circleId, record, {

@@ -56,7 +56,7 @@ try {
   const code = create.circle.code;
   ok(`circle created (${code})`);
 
-  const player = conn();
+  let player = conn();
   await onConnect(player, "player");
   const join = await player
     .timeout(5000)
@@ -274,6 +274,21 @@ try {
   await waitUntil(() => mirrors.some((m) => m.effect.kind === "flash" && m.playerIds.includes(playerId)));
   ok("GM received an effect:mirror for the storm lightning flash");
 
+  // RESUME ON (RE)JOIN: a device joining while the storm is active is re-sent the
+  // sustained ambiance on join, so a refresh restarts the background sound. (The
+  // GM stays connected, so the registry isn't torn down when a player drops.)
+  const latecomer = conn();
+  await onConnect(latecomer, "latecomer");
+  const lateResumed = [];
+  latecomer.on("effect:deliver", (e) => lateResumed.push(e));
+  const lateJoin = await latecomer
+    .timeout(5000)
+    .emitWithAck("circle:join", { code, name: "Latecomer", deviceId: "smoke-m2-dev-late" });
+  check(lateJoin.ok === true, "a fresh device joined during the active storm");
+  await waitUntil(() => lateResumed.some((e) => e.kind === "ambiance" && e.scene === "storm"), 3000);
+  ok("joining mid-storm resumes the storm ambiance (background sound restarts)");
+  latecomer.close();
+
   // Switch to Rain → storm is replaced (weather is mutually exclusive, no layering).
   const stormEnded = waitFor(player, "effect:end", (i) => i.effectId === stormSend.effectId);
   const rainSwitch = await gm.timeout(5000).emitWithAck("effect:send", {
@@ -311,6 +326,28 @@ try {
   ok("whisperscape delivered the dissonant bed (whispers loop)");
   await waitUntil(() => latestActive.some((e) => e.id === wsStart.effectId && e.sustained && e.label === "Whispers"));
   ok("whisperscape shows in effects:active as sustained Whispers");
+
+  // REFRESH MID-WHISPERSCAPE: drop the player socket and reconnect with the SAME
+  // deviceId (same identity). The bed targets this one player, so the server must
+  // re-deliver it on rejoin — otherwise a refresh leaves the ambience silent.
+  player.close();
+  const refreshed = conn();
+  await onConnect(refreshed, "player(refresh)");
+  const wsResumed = [];
+  refreshed.on("effect:deliver", (e) => wsResumed.push(e));
+  const rejoin = await refreshed
+    .timeout(5000)
+    .emitWithAck("circle:join", { code, name: "Bram", deviceId: "smoke-m2-dev" });
+  check(
+    rejoin.ok === true && rejoin.player.id === playerId,
+    "player rejoined after refresh (same identity)",
+  );
+  player = refreshed; // keep a live handle for the remaining steps
+  await waitUntil(
+    () => wsResumed.some((e) => e.kind === "audio" && e.source.cue === "whispers" && e.loop === true),
+    3000,
+  );
+  ok("refreshing mid-whisperscape resumes the dissonant bed (whisper bed restarts)");
 
   if (process.env.SMOKE_TTS === "1") {
     const phrase = await waitFor(
