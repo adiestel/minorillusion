@@ -12,7 +12,9 @@
  */
 import { useEffect, useState } from "react";
 import type {
+  EffectSpec,
   Player,
+  SendEffectRequest,
   SendEffectResult,
   Target,
   WhisperscapeRequest,
@@ -43,6 +45,17 @@ export function WhisperVoices({ players }: { players: Player[] }) {
   const [maxSec, setMaxSec] = useState(20);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+
+  // Voice FX (moved here from the Soundboard): the spoken-voice treatment that
+  // colours both one-off speech (Play now / a phrase's ▶) and the whisperscape's
+  // looping phrases. Independent toggles — e.g. echo + distortion without the bed.
+  // The bed only wraps ONE-OFF speech; the whisperscape already rides its own bed.
+  const [fxBed, setFxBed] = useState(false);
+  const [fxEcho, setFxEcho] = useState(true);
+  const [fxDistortion, setFxDistortion] = useState(true);
+  const [fxPan, setFxPan] = useState(true);
+  // Which one-off speech is in flight ("draft" or `phrase:<i>`), to show feedback.
+  const [playId, setPlayId] = useState<string | null>(null);
 
   // Drag-and-drop reordering of the phrase library (native HTML5 DnD).
   const [dragIdx, setDragIdx] = useState<number | null>(null);
@@ -92,6 +105,48 @@ export function WhisperVoices({ players }: { players: Player[] }) {
     });
   }
 
+  function buildTarget(): Target {
+    return targetMode === "broadcast"
+      ? { kind: "broadcast" }
+      : { kind: "players", playerIds: Array.from(selectedIds) };
+  }
+
+  /** The current Voice FX as audio-effect fields (the bed wraps one-off speech). */
+  function voiceFx() {
+    return {
+      ...(fxBed ? { whispers: true, whisperGain: bedVol } : {}),
+      ...(fxEcho ? { echo: true } : {}),
+      ...(fxDistortion ? { distortion: true } : {}),
+      ...(fxPan ? { pan: true } : {}),
+    };
+  }
+
+  /** Speak one line immediately (one-off TTS) with the current Voice FX. */
+  function fireSpeak(text: string, id: string) {
+    const t = text.trim();
+    if (t.length === 0) return;
+    if (!targetReady) {
+      setStatus("Choose at least one player.");
+      return;
+    }
+    setPlayId(id);
+    const spec: EffectSpec = {
+      kind: "audio",
+      source: { via: "tts", text: t.slice(0, 600) },
+      gain: voiceVol,
+      ...voiceFx(),
+    };
+    const req: SendEffectRequest = { target: buildTarget(), spec };
+    socket.emit("effect:send", req, (r: SendEffectResult) => {
+      setPlayId((cur) => (cur === id ? null : cur));
+      setStatus(
+        r.ok
+          ? `Spoke → ${r.deliveredTo} ${r.deliveredTo === 1 ? "player" : "players"}`
+          : `Error: ${r.error}`,
+      );
+    });
+  }
+
   function start() {
     if (phrases.length === 0) {
       setStatus("Add at least one phrase.");
@@ -102,15 +157,15 @@ export function WhisperVoices({ players }: { players: Player[] }) {
       return;
     }
     setBusy(true);
-    const target: Target =
-      targetMode === "broadcast"
-        ? { kind: "broadcast" }
-        : { kind: "players", playerIds: Array.from(selectedIds) };
     const req: WhisperscapeRequest = {
-      target,
+      target: buildTarget(),
       phrases,
       order,
       loop,
+      // The whisperscape rides its own bed, so only echo/distortion/pan apply.
+      echo: fxEcho,
+      distortion: fxDistortion,
+      pan: fxPan,
       bedGain: bedVol,
       voiceGain: voiceVol,
       minGapMs: Math.round(minSec * 1000),
@@ -131,8 +186,8 @@ export function WhisperVoices({ players }: { players: Player[] }) {
       <h2 style={sectionHeadingStyle}>Whisper voices</h2>
       <p style={hintStyle}>
         A dissonant bed with phrases that surface as echoing whispers — one ear at a
-        time. Shuffle or play in order (drag to reorder), loop or stop once done.
-        Stop it from Active effects.
+        time. Type a line to add it or speak it now; drag to reorder; ▶ plays any
+        phrase at once. Voice FX colour every spoken line. Stop it from Active effects.
       </p>
 
       {/* Target — aim the whole whisperscape at everyone or specific players. */}
@@ -164,11 +219,11 @@ export function WhisperVoices({ players }: { players: Player[] }) {
         )}
       </div>
 
-      {/* Phrase library */}
+      {/* Type a line → Add it to the library, or Play now (one-off speech). */}
       <div style={{ display: "flex", gap: space(2), marginTop: space(3) }}>
         <input
           type="text"
-          placeholder="Add a phrase the voices will speak…"
+          placeholder="Type a line — add it, or play it now…"
           value={draft}
           maxLength={300}
           onChange={(e) => setDraft(e.target.value)}
@@ -179,6 +234,14 @@ export function WhisperVoices({ players }: { players: Player[] }) {
         />
         <button onClick={addPhrase} disabled={draft.trim().length === 0} style={addButtonStyle(draft.trim().length === 0)}>
           Add
+        </button>
+        <button
+          onClick={() => fireSpeak(draft, "draft")}
+          disabled={draft.trim().length === 0 || !targetReady || playId === "draft"}
+          style={playNowButtonStyle(draft.trim().length === 0 || !targetReady || playId === "draft")}
+          title="Speak this line now"
+        >
+          {playId === "draft" ? "Speaking…" : "Play now"}
         </button>
       </div>
 
@@ -227,6 +290,17 @@ export function WhisperVoices({ players }: { players: Player[] }) {
                   {p}
                 </span>
                 <button
+                  draggable={false}
+                  onClick={() => fireSpeak(p, `phrase:${i}`)}
+                  disabled={!targetReady || playId === `phrase:${i}`}
+                  style={playButtonStyle(!targetReady || playId === `phrase:${i}`)}
+                  aria-label="Play this phrase now"
+                  title="Play now"
+                >
+                  ▶
+                </button>
+                <button
+                  draggable={false}
                   onClick={() => setPhrases((cur) => cur.filter((_, idx) => idx !== i))}
                   style={removeButtonStyle}
                   aria-label="Remove phrase"
@@ -267,6 +341,25 @@ export function WhisperVoices({ players }: { players: Player[] }) {
           </div>
         </div>
       )}
+
+      {/* Voice FX — colours every spoken line: Play now, a phrase's ▶, and the
+          whisperscape's looping phrases. The bed wraps one-off speech only (the
+          whisperscape already rides its own dissonant bed). */}
+      <label style={{ ...labelStyle, marginTop: space(4) }}>Voice FX</label>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: space(2), marginTop: space(2) }}>
+        <ToggleButton active={fxBed} onClick={() => setFxBed((v) => !v)}>
+          Whispers bed
+        </ToggleButton>
+        <ToggleButton active={fxEcho} onClick={() => setFxEcho((v) => !v)}>
+          Echo
+        </ToggleButton>
+        <ToggleButton active={fxDistortion} onClick={() => setFxDistortion((v) => !v)}>
+          Distortion
+        </ToggleButton>
+        <ToggleButton active={fxPan} onClick={() => setFxPan((v) => !v)}>
+          Pan
+        </ToggleButton>
+      </div>
 
       {/* Levels */}
       <div style={{ display: "flex", flexDirection: "column", gap: space(2), marginTop: space(4) }}>
@@ -510,6 +603,33 @@ function addButtonStyle(disabled: boolean): React.CSSProperties {
     fontSize: "0.9rem",
     cursor: disabled ? "not-allowed" : "pointer",
     whiteSpace: "nowrap",
+  };
+}
+
+function playNowButtonStyle(disabled: boolean): React.CSSProperties {
+  return {
+    padding: `${space(3)} ${space(4)}`,
+    background: disabled ? palette.ash : palette.emberDim,
+    color: disabled ? palette.parchmentDim : palette.bone,
+    border: `1px solid ${disabled ? palette.ash : palette.ember}`,
+    borderRadius: radius.md,
+    fontWeight: 600,
+    fontSize: "0.9rem",
+    cursor: disabled ? "not-allowed" : "pointer",
+    whiteSpace: "nowrap",
+  };
+}
+
+function playButtonStyle(disabled: boolean): React.CSSProperties {
+  return {
+    flexShrink: 0,
+    background: "transparent",
+    border: "none",
+    color: disabled ? "var(--text-dim)" : palette.ember,
+    fontSize: "0.8rem",
+    lineHeight: 1,
+    cursor: disabled ? "not-allowed" : "pointer",
+    padding: `0 ${space(1)}`,
   };
 }
 

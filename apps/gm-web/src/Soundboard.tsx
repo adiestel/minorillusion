@@ -3,10 +3,11 @@
  * One-tap effect triggers, split into two labeled sections:
  *   • Loops — sustained effects that run until stopped (Rain, Storm, embers).
  *   • One-shots — transient effects that auto-close (Thunderclap, Chime,
- *     Buzz, Rumble, Heartbeat) plus a TTS "Speak" row.
+ *     Buzz, Rumble, Heartbeat).
  * Every button fires `effect:send` and surfaces a brief transient status from
  * the ack. Stopping a sustained effect is no longer done here — it moves to the
- * ActiveEffects panel, which reads the server's live registry.
+ * ActiveEffects panel, which reads the server's live registry. Spoken voice
+ * (text-to-speech + Voice FX) lives in the Whisper voices panel.
  *
  * Sits below the MessageComposer inside the active-circle view. Carries its
  * own small target selector (Everyone vs specific connected players), mirroring
@@ -97,17 +98,6 @@ export function Soundboard({ players }: SoundboardProps) {
   const [targetMode, setTargetMode] = useState<"broadcast" | "players">("broadcast");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  // --- TTS row ---
-  const [ttsText, setTtsText] = useState("");
-  // Spooky-voice treatment — independent toggles so e.g. echo + distortion can
-  // run WITHOUT the whispers bed. Independent voice / whisper levels.
-  const [fxBed, setFxBed] = useState(false);
-  const [fxEcho, setFxEcho] = useState(true);
-  const [fxDistortion, setFxDistortion] = useState(true);
-  const [fxPan, setFxPan] = useState(true);
-  const [voiceVol, setVoiceVol] = useState(0.9);
-  const [whisperVol, setWhisperVol] = useState(0.4);
-
   // --- Fade interval for looping weather beds (seconds) ---
   const [fadeSeconds, setFadeSeconds] = useState(5);
 
@@ -182,34 +172,6 @@ export function Soundboard({ players }: SoundboardProps) {
       const req: SendEffectRequest = { target: buildTarget(), spec };
       socket.emit("effect:send", req, handle);
     }
-  }
-
-  /** Fire TTS via the audio effect (server resolves it through ElevenLabs). */
-  function fireSpeak() {
-    const text = ttsText.trim();
-    if (text.length === 0 || !targetReady) return;
-    setBusyId("tts");
-    const spec: EffectSpec = {
-      kind: "audio",
-      source: { via: "tts", text },
-      gain: voiceVol,
-      // Independent treatment toggles (any subset).
-      ...(fxBed ? { whispers: true, whisperGain: whisperVol } : {}),
-      ...(fxEcho ? { echo: true } : {}),
-      ...(fxDistortion ? { distortion: true } : {}),
-      ...(fxPan ? { pan: true } : {}),
-    };
-    const req: SendEffectRequest = { target: buildTarget(), spec };
-    socket.emit("effect:send", req, (result: SendEffectResult) => {
-      setBusyId((cur) => (cur === "tts" ? null : cur));
-      if (result.ok) {
-        showStatus({ kind: "ok", text: `Speak → ${result.deliveredTo} ${plural(result.deliveredTo)}` });
-        setTtsText("");
-      } else {
-        // Surface the adapter error inline (e.g. no ElevenLabs key configured).
-        showStatus({ kind: "error", text: `Speak: ${result.error}` });
-      }
-    });
   }
 
   // --- Render ---
@@ -295,65 +257,6 @@ export function Soundboard({ players }: SoundboardProps) {
             disabled={!targetReady || busyId === b.id}
           />
         ))}
-      </div>
-
-      {/* TTS "Speak" row */}
-      <div style={{ display: "flex", flexDirection: "column", gap: space(2), marginTop: space(5) }}>
-        <label style={labelStyle}>Speak (text-to-speech)</label>
-        <div style={{ display: "flex", gap: space(2), alignItems: "stretch" }}>
-          <input
-            type="text"
-            placeholder="Say something aloud…"
-            value={ttsText}
-            maxLength={600}
-            onChange={(e) => setTtsText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") fireSpeak();
-            }}
-            style={{
-              flex: 1,
-              minWidth: 0,
-              background: "var(--bg)",
-              color: "var(--text)",
-              border: `1px solid ${palette.ash}`,
-              borderRadius: radius.md,
-              padding: `${space(3)} ${space(4)}`,
-              fontSize: "0.95rem",
-              outline: "none",
-              fontFamily: "var(--font)",
-              caretColor: palette.ember,
-            }}
-          />
-          <button
-            onClick={fireSpeak}
-            disabled={ttsText.trim().length === 0 || !targetReady || busyId === "tts"}
-            style={sendButtonStyle(ttsText.trim().length === 0 || !targetReady || busyId === "tts")}
-          >
-            {busyId === "tts" ? "Speaking…" : "Speak"}
-          </button>
-        </div>
-
-        {/* Voice FX — independent toggles (any subset) */}
-        <label style={{ ...labelStyle, marginTop: space(3) }}>Voice FX</label>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: space(2) }}>
-          <ToggleButton active={fxBed} onClick={() => setFxBed((v) => !v)}>
-            Whispers bed
-          </ToggleButton>
-          <ToggleButton active={fxEcho} onClick={() => setFxEcho((v) => !v)}>
-            Echo
-          </ToggleButton>
-          <ToggleButton active={fxDistortion} onClick={() => setFxDistortion((v) => !v)}>
-            Distortion
-          </ToggleButton>
-          <ToggleButton active={fxPan} onClick={() => setFxPan((v) => !v)}>
-            Pan
-          </ToggleButton>
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: space(2), marginTop: space(2) }}>
-          <VolumeSlider label="Voice" value={voiceVol} onChange={setVoiceVol} />
-          {fxBed && <VolumeSlider label="Whispers" value={whisperVol} onChange={setWhisperVol} />}
-        </div>
       </div>
 
       {/* Transient status line */}
@@ -540,17 +443,3 @@ const effectGridStyle: React.CSSProperties = {
   marginTop: space(2),
 };
 
-function sendButtonStyle(disabled: boolean): React.CSSProperties {
-  return {
-    padding: `${space(3)} ${space(5)}`,
-    background: disabled ? palette.ash : palette.ember,
-    color: disabled ? palette.parchmentDim : palette.nearBlack,
-    border: "none",
-    borderRadius: radius.md,
-    fontWeight: 700,
-    fontSize: "0.95rem",
-    cursor: disabled ? "not-allowed" : "pointer",
-    transition: "background 0.15s",
-    whiteSpace: "nowrap",
-  };
-}

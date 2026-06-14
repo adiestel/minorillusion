@@ -514,6 +514,11 @@ export const whisperscapeRequestSchema = z.object({
   order: z.enum(["random", "sequential"]).default("random"),
   /** Repeat after the whole library has played, or stop once done. */
   loop: z.boolean().default(true),
+  /** Voice FX applied to the spoken phrases (the bed is the ambience already, so
+   *  phrases never re-add it). Mirror the GM's Voice FX toggles. */
+  echo: z.boolean().default(true),
+  distortion: z.boolean().default(true),
+  pan: z.boolean().default(true),
   /** 0..1 level of the dissonant bed (default 0.5). */
   bedGain: z.number().min(0).max(1).optional(),
   /** 0..1 level of the spoken phrases (default 0.9). */

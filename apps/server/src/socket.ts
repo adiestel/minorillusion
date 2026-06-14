@@ -501,6 +501,9 @@ export function createSocketServer(
       phrases: string[];
       order: "random" | "sequential";
       loop: boolean;
+      echo: boolean;
+      distortion: boolean;
+      pan: boolean;
       voiceGain: number;
       minGap: number;
       maxGap: number;
@@ -510,7 +513,8 @@ export function createSocketServer(
   ): void {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const { phrases, order, loop, voiceGain, minGap, maxGap, voice, bedId } = opts;
+    const { phrases, order, loop, echo, distortion, pan, voiceGain, minGap, maxGap, voice, bedId } =
+      opts;
 
     // Phrase order: a no-repeat grab bag ("random") or the GM's order
     // ("sequential"), tracking the position within the pass for the live readout.
@@ -546,13 +550,13 @@ export function createSocketServer(
         const sock =
           whisperPlayerId !== undefined ? present.get(whisperPlayerId) : undefined;
         if (sock && whisperPlayerId !== undefined) {
-          // echo + distortion + pan, NO bed (the bed is already the ambience).
+          // GM-configured FX, NO bed (the bed is already the ambience).
           const eff = await buildEffect({
             kind: "audio",
             source: { via: "tts", text: step.phrase, ...(voice ? { voice } : {}) },
-            echo: true,
-            distortion: true,
-            pan: true,
+            echo,
+            distortion,
+            pan,
             gain: voiceGain,
           });
           if (!stopped) {
@@ -854,7 +858,7 @@ export function createSocketServer(
         return;
       }
 
-      const { target, phrases, order, loop } = parsed.data;
+      const { target, phrases, order, loop, echo, distortion, pan } = parsed.data;
       const bedGain = parsed.data.bedGain ?? 0.5;
       const voiceGain = parsed.data.voiceGain ?? 0.9;
       const minGap = parsed.data.minGapMs ?? 8000;
@@ -887,6 +891,9 @@ export function createSocketServer(
             phrases,
             order,
             loop,
+            echo,
+            distortion,
+            pan,
             voiceGain,
             minGap,
             maxGap,

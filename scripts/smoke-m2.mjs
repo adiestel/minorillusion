@@ -375,8 +375,8 @@ try {
       20000,
     );
     check(
-      phrase.distortion === true && phrase.echo === true && phrase.whispers !== true,
-      "whisperscape fired a spoken phrase (echo + distortion, no bed re-add)",
+      phrase.distortion === true && phrase.echo === true && phrase.pan === true && phrase.whispers !== true,
+      "whisperscape fired a spoken phrase (configured echo + distortion + pan, no bed re-add)",
     );
   }
 
