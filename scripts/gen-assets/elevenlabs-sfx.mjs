@@ -55,8 +55,8 @@ const THUNDER_VARIANTS = [
   "A sharp, close thunderclap — a sudden cracking boom with a short tight tail. Cinematic, dramatic, no music, no rain.",
   "A powerful rolling thunderclap — a deep low rumble that builds then rolls off slowly into the distance. Cinematic, no music, no rain.",
   "A distant thunderclap — a muffled low boom far away, soft and ominous with a long reverb. Cinematic, no music, no rain.",
-  "A violent thunder crack — a bright sharp snap immediately followed by a heavy explosive boom. Cinematic, dramatic, no music, no rain.",
-  "A long crackling thunderclap — a jagged electric crack that tumbles and echoes, rumbling for several seconds. Cinematic, no music, no rain.",
+  "A natural rolling thunderclap — a deep resonant rumble that swells then rolls away across the sky, weighty and organic, soft-edged. Realistic storm thunder, no explosion, no sharp boom, no music, no rain.",
+  "A long peal of distant thunder — a low grumbling rumble that tumbles and fades slowly into the distance, gentle and natural. Realistic faraway storm, no sharp crack, no explosion, no music, no rain.",
 ];
 
 async function generate(key, prompt, { seconds, loop, promptInfluence } = {}) {
