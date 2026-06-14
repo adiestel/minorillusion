@@ -119,13 +119,16 @@ export function App() {
     };
   }, []);
 
-  // Session restore: on mount, if a saved code exists, attempt circle:open.
-  // We wait until the socket is connected before emitting.
+  // Session restore + reconnect: re-open the saved circle on every (re)connect.
+  // A reconnected socket (server restart / network blip) gets a fresh id with no
+  // room membership or binding, so without re-opening the GM would stop seeing
+  // presence / effects and couldn't send — re-opening re-subscribes and pulls a
+  // fresh roster + active-effects snapshot.
   useEffect(() => {
-    const code = loadCircleCode();
-    if (code === null) return;
+    if (loadCircleCode() === null) return;
 
     function attempt() {
+      const code = loadCircleCode();
       if (code === null) return;
       socket.emit("circle:open", { code }, (result: OpenCircleResult) => {
         if (result.ok) {
@@ -138,13 +141,9 @@ export function App() {
       });
     }
 
-    if (socket.connected) {
-      attempt();
-    } else {
-      // Wait for the first successful connection, then restore.
-      socket.once("connect", attempt);
-      return () => { socket.off("connect", attempt); };
-    }
+    if (socket.connected) attempt();
+    socket.on("connect", attempt);
+    return () => { socket.off("connect", attempt); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

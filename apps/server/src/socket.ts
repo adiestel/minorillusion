@@ -725,8 +725,15 @@ export function createSocketServer(
         active.clearCircle(state.circleId);
       }
 
-      // A player: mark offline + broadcast the thinned roster.
+      // A player: mark offline + broadcast the thinned roster — UNLESS the same
+      // player already holds another live socket (a reconnect that re-joined
+      // before this old socket's disconnect landed). Marking offline then would
+      // wrongly flicker them out ("ghost offline") right after they returned.
       if (state?.playerId) {
+        const reconnected = [...bindings.values()].some(
+          (b) => b.playerId === state.playerId,
+        );
+        if (reconnected) return; // a newer socket holds this player — leave it.
         try {
           await service.setConnected(state.playerId, false);
           await broadcastPresence(state.circleId);

@@ -322,6 +322,31 @@ try {
   ok("removed player gone from presence");
   p2.close();
 
+  // === reconnect race: an OLD socket dropping AFTER a same-device rejoin must
+  //     NOT mark the player offline ("ghost offline" presence flicker) ========
+  const rcA = conn();
+  await onConnect(rcA, "reconnectA");
+  const rj1 = await rcA
+    .timeout(5000)
+    .emitWithAck("circle:join", { code, name: "Echo", deviceId: "smoke-reconnect-dev" });
+  const rcId = rj1.ok ? rj1.player.id : "";
+  // The same device joins again on a fresh socket (what a reconnect does).
+  const rcB = conn();
+  await onConnect(rcB, "reconnectB");
+  const rj2 = await rcB
+    .timeout(5000)
+    .emitWithAck("circle:join", { code, name: "Echo", deviceId: "smoke-reconnect-dev" });
+  check(rj2.ok === true && rj2.player.id === rcId, "same-device rejoin maps to the same player id");
+  // Drop the OLD socket; the player must stay connected (newer socket holds it).
+  rcA.disconnect();
+  await new Promise((r) => setTimeout(r, 350));
+  const reopened = await gm.timeout(5000).emitWithAck("circle:open", { code });
+  const echo = reopened.ok ? reopened.players.find((p) => p.id === rcId) : undefined;
+  check(echo?.connected === true, "old socket dropping after a same-device rejoin keeps the player connected");
+  // Clean up: remove the throwaway reconnect player.
+  await gm.timeout(5000).emitWithAck("player:remove", { playerId: rcId });
+  rcB.close();
+
   gm.close();
   player.close();
 } catch (e) {

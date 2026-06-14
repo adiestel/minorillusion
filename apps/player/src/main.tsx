@@ -699,68 +699,78 @@ function App() {
     const settle = window.setTimeout(report, 600);
     window.addEventListener("resize", onResize);
     window.addEventListener("orientationchange", report);
-    // Re-report after a socket reconnect: the server binding is fresh and has no
-    // viewport until we send one again, otherwise the tile falls back to default.
-    socket.on("connect", report);
+    // (Re-reporting after a socket reconnect is handled by the rejoin flow, once
+    // the server binding is re-established — see the reconnect effect below.)
     return () => {
       if (timer !== undefined) window.clearTimeout(timer);
       window.clearTimeout(settle);
       window.removeEventListener("resize", onResize);
       window.removeEventListener("orientationchange", report);
-      socket.off("connect", report);
     };
   }, [appState.screen]);
 
   // ---------------------------------------------------------------------------
-  // Auto-rejoin on mount when a stored session exists
+  // Rejoin from the stored session on every (re)connect.
   //
-  // Reconnect already consented (D10: don't re-prompt). It has no explicit tap,
-  // so audio can't be unlocked yet — we attach a one-shot pointerdown on the
-  // document to prime audio on the player's first touch after reconnect.
+  // Covers first load with a saved session AND any later socket reconnect
+  // (server restart / network blip). Without re-joining on reconnect, the fresh
+  // socket has no server binding, so the GM sees the circle as empty ("only one
+  // here") and the player's reported viewport is lost. Reconnect was already
+  // consented (D10: don't re-prompt); a first touch primes iOS audio.
   // ---------------------------------------------------------------------------
 
   useEffect(() => {
-    const session = loadSession();
-    if (session === null) return; // no stored session — nothing to do
+    if (loadSession() === null) return; // no stored session — nothing to restore
 
     // First user touch primes iOS audio (reconnect path has no consent tap).
     const unlockOnce = () => audio.unlock();
     document.addEventListener("pointerdown", unlockOnce, { once: true });
 
-    // Already in "reconnecting" state (set by useState initialiser above).
-    if (!socket.connected) socket.connect();
+    const rejoin = () => {
+      const session = loadSession();
+      if (session === null) return;
+      socket.emit(
+        "circle:join",
+        { code: session.code, name: session.name, deviceId },
+        (result: JoinResult) => {
+          if (result.ok) {
+            saveSession({
+              code: result.circle.code,
+              name: result.player.name,
+              consented: true,
+            });
+            setAppState({
+              screen: "joined",
+              joined: {
+                circleId: result.circle.id,
+                playerId: result.player.id,
+                playerName: result.player.name,
+                players: [result.player],
+              },
+            });
+            // Re-report the viewport now that the binding is re-established, so
+            // the GM Stage keeps the right size across reconnects.
+            const w = Math.round(window.innerWidth);
+            const h = Math.round(window.innerHeight);
+            if (w > 0 && h > 0) socket.emit("player:viewport", { width: w, height: h });
+          } else {
+            clearSession();
+            setAppState({ screen: "join" });
+          }
+        },
+      );
+    };
 
-    socket.emit(
-      "circle:join",
-      { code: session.code, name: session.name, deviceId },
-      (result: JoinResult) => {
-        if (result.ok) {
-          // Keep the consent flag intact across reconnects.
-          saveSession({
-            code: result.circle.code,
-            name: result.player.name,
-            consented: true,
-          });
-          setAppState({
-            screen: "joined",
-            joined: {
-              circleId: result.circle.id,
-              playerId: result.player.id,
-              playerName: result.player.name,
-              players: [result.player],
-            },
-          });
-        } else {
-          clearSession();
-          setAppState({ screen: "join" });
-        }
-      },
-    );
+    // Rejoin now if already connected, and on every (re)connect thereafter.
+    if (socket.connected) rejoin();
+    else socket.connect();
+    socket.on("connect", rejoin);
 
     return () => {
       document.removeEventListener("pointerdown", unlockOnce);
+      socket.off("connect", rejoin);
     };
-    // Intentionally runs only once on mount — no deps needed.
+    // Runs once on mount; the listener handles all later reconnects.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
