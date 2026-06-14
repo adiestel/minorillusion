@@ -80,6 +80,11 @@ export async function buildEffect(
       if (spec.gain !== undefined) effect.gain = spec.gain;
       if (spec.loop !== undefined) effect.loop = spec.loop;
       if (spec.label !== undefined) effect.label = spec.label;
+      // Spooky-voice treatment carried through verbatim (player applies it).
+      if (spec.whispers !== undefined) effect.whispers = spec.whispers;
+      if (spec.echo !== undefined) effect.echo = spec.echo;
+      if (spec.pan !== undefined) effect.pan = spec.pan;
+      if (spec.whisperGain !== undefined) effect.whisperGain = spec.whisperGain;
       if (opts?.startDelayMs !== undefined) effect.startDelayMs = opts.startDelayMs;
       return effect;
     }
@@ -219,12 +224,14 @@ export function classifyEffect(spec: EffectSpec): EffectClassification {
           label: cueLabel(spec.source.cue),
         };
       }
-      // tts: rough playout estimate (read speed), capped, so the panel can count down.
+      // tts: rough playout estimate (read speed), capped, so the panel can count
+      // down. The whispers treatment adds the 2s lead-in + 2s tail-out.
+      const speech = Math.min(20_000, 1500 + spec.source.text.length * 60);
       return {
         register: true,
         sustained: false,
-        durationMs: Math.min(20_000, 1500 + spec.source.text.length * 60),
-        label: "Speak",
+        durationMs: speech + (spec.whispers ? 4000 : 0),
+        label: spec.whispers ? "Whispered speech" : "Speak",
       };
     }
 

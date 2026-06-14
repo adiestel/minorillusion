@@ -99,6 +99,11 @@ export function Soundboard({ players }: SoundboardProps) {
 
   // --- TTS row ---
   const [ttsText, setTtsText] = useState("");
+  // Spooky-voice treatment: a dissonant-whispers bed + echo + L↔R pan, with
+  // independent voice / whisper levels.
+  const [whisperVoice, setWhisperVoice] = useState(false);
+  const [voiceVol, setVoiceVol] = useState(0.9);
+  const [whisperVol, setWhisperVol] = useState(0.4);
 
   // --- Fade interval for looping weather beds (seconds) ---
   const [fadeSeconds, setFadeSeconds] = useState(5);
@@ -174,10 +179,16 @@ export function Soundboard({ players }: SoundboardProps) {
     const text = ttsText.trim();
     if (text.length === 0 || !targetReady) return;
     setBusyId("tts");
-    const req: SendEffectRequest = {
-      target: buildTarget(),
-      spec: { kind: "audio", source: { via: "tts", text } },
+    const spec: EffectSpec = {
+      kind: "audio",
+      source: { via: "tts", text },
+      gain: voiceVol,
+      // When the whispers treatment is on: wrap in the bed + echo + L↔R pan.
+      ...(whisperVoice
+        ? { whispers: true, echo: true, pan: true, whisperGain: whisperVol }
+        : {}),
     };
+    const req: SendEffectRequest = { target: buildTarget(), spec };
     socket.emit("effect:send", req, (result: SendEffectResult) => {
       setBusyId((cur) => (cur === "tts" ? null : cur));
       if (result.ok) {
@@ -305,6 +316,42 @@ export function Soundboard({ players }: SoundboardProps) {
             {busyId === "tts" ? "Speaking…" : "Speak"}
           </button>
         </div>
+
+        {/* Dissonant-whispers treatment for the voice */}
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: space(2),
+            marginTop: space(2),
+            fontSize: "0.85rem",
+            color: "var(--text-dim)",
+            cursor: "pointer",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={whisperVoice}
+            onChange={(e) => setWhisperVoice(e.target.checked)}
+            style={{ accentColor: palette.ember, cursor: "pointer" }}
+          />
+          Dissonant whispers (bed + echo + drifting pan)
+        </label>
+
+        {whisperVoice && (
+          <div style={{ display: "flex", flexDirection: "column", gap: space(2), marginTop: space(1) }}>
+            <VolumeSlider
+              label="Voice"
+              value={voiceVol}
+              onChange={setVoiceVol}
+            />
+            <VolumeSlider
+              label="Whispers"
+              value={whisperVol}
+              onChange={setWhisperVol}
+            />
+          </div>
+        )}
       </div>
 
       {/* Transient status line */}
@@ -424,6 +471,35 @@ function ToggleButton({ active, onClick, children }: ToggleButtonProps) {
 
 function plural(n: number): string {
   return n === 1 ? "player" : "players";
+}
+
+// ---------------------------------------------------------------------------
+// VolumeSlider — a labelled 0..1 level control
+// ---------------------------------------------------------------------------
+
+interface VolumeSliderProps {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+}
+
+function VolumeSlider({ label, value, onChange }: VolumeSliderProps) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: space(3) }}>
+      <label style={{ ...labelStyle, whiteSpace: "nowrap", minWidth: 96 }}>
+        {label} {Math.round(value * 100)}%
+      </label>
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.05}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        style={{ flex: 1, accentColor: palette.ember, cursor: "pointer" }}
+      />
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------

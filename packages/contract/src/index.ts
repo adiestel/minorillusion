@@ -228,13 +228,27 @@ export const audioSourceSpecSchema = z.discriminatedUnion("via", [
 ]);
 export type AudioSourceSpec = z.infer<typeof audioSourceSpecSchema>;
 
+/**
+ * Spooky voice treatment for a spoken (TTS) effect. `whispers` wraps it in the
+ * dissonant-whispers bed (fades in 2s before, out 2s after the speech); `echo`
+ * adds a feedback echo; `pan` slowly sweeps it L↔R. `whisperGain` sets the bed
+ * level independently of the voice (`gain`). The player applies these.
+ */
+const voiceFxFields = {
+  whispers: z.boolean().optional(),
+  echo: z.boolean().optional(),
+  pan: z.boolean().optional(),
+  whisperGain: z.number().min(0).max(1).optional(),
+};
+
 export const audioSpecSchema = z.object({
   kind: z.literal("audio"),
   source: audioSourceSpecSchema,
-  /** 0..1 playback gain (default 1). */
+  /** 0..1 playback gain (default 1) — the voice level for a spoken effect. */
   gain: z.number().min(0).max(1).optional(),
   loop: z.boolean().optional(),
   label: z.string().max(80).optional(),
+  ...voiceFxFields,
 });
 export type AudioSpec = z.infer<typeof audioSpecSchema>;
 
@@ -311,6 +325,7 @@ export const audioEffectSchema = z.object({
   gain: z.number().min(0).max(1).optional(),
   loop: z.boolean().optional(),
   label: z.string().max(80).optional(),
+  ...voiceFxFields,
   startDelayMs,
   createdAt: z.string().datetime(),
 });

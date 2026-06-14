@@ -302,6 +302,30 @@ try {
         eff.kind === "audio" && eff.source.via === "data" && eff.source.data.startsWith("data:audio/mpeg"),
         "TTS synthesized to an inline data: audio effect",
       );
+
+      // Whispers-mode speech carries the spooky-voice flags through to the player.
+      const spookyDeliver = waitFor(player, "effect:deliver", (e) => e.kind === "audio" && e.whispers === true, 15000);
+      const spooky = await gm.timeout(20000).emitWithAck("effect:send", {
+        target: { kind: "broadcast" },
+        spec: {
+          kind: "audio",
+          source: { via: "tts", text: "The walls remember your name." },
+          gain: 0.9,
+          whispers: true,
+          echo: true,
+          pan: true,
+          whisperGain: 0.4,
+        },
+      });
+      if (spooky.ok) {
+        const se = await spookyDeliver;
+        check(
+          se.whispers === true && se.echo === true && se.pan === true && se.whisperGain === 0.4,
+          "whispers-mode speech carries whispers/echo/pan/whisperGain to the player",
+        );
+      } else {
+        bad(`whispers-mode TTS returned an error: ${spooky.error}`);
+      }
     } else {
       bad(`TTS effect:send returned an error: ${tts.error}`);
     }

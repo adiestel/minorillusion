@@ -144,6 +144,20 @@ describe("effect specs (what the GM asks for)", () => {
     ).toBe(false);
   });
 
+  it("accepts the spooky-voice treatment on a spoken audio spec", () => {
+    expect(
+      effectSpecSchema.safeParse({
+        kind: "audio",
+        source: { via: "tts", text: "Come closer…" },
+        gain: 0.9,
+        whispers: true,
+        echo: true,
+        pan: true,
+        whisperGain: 0.4,
+      }).success,
+    ).toBe(true);
+  });
+
   it("requires a non-empty TTS text", () => {
     expect(
       effectSpecSchema.safeParse({

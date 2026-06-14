@@ -497,6 +497,43 @@ function App() {
     [clearAmbiance, registerSustained],
   );
 
+  /**
+   * A spoken effect with spooky treatment: fade the dissonant-whispers bed in
+   * over 2s, start the voice (with echo / L↔R pan) 2s later, then fade the bed
+   * out 2s after the voice ends. A cleanup (run by effect:end if the GM stops it
+   * early) cancels the pending voice and the bed.
+   */
+  const playSpookyVoice = useCallback(
+    (
+      id: string,
+      data: string,
+      o: { whispers: boolean; echo: boolean; pan: boolean; gain?: number; whisperGain?: number },
+    ) => {
+      const bed = o.whispers
+        ? audio.playWhisperBed({ gain: o.whisperGain ?? 0.4, fadeInMs: 2000, fadeOutMs: 2000 })
+        : null;
+      const lead = o.whispers ? 2000 : 0;
+      let voice: { stop: () => void } | null = null;
+      const leadTimer = window.setTimeout(() => {
+        voice = audio.playVoice(data, {
+          gain: o.gain,
+          echo: o.echo,
+          pan: o.pan,
+          onEnded: () => {
+            bed?.stop(); // fade the bed out 2s after the voice finishes
+            sustainedCleanups.current.delete(id);
+          },
+        });
+      }, lead);
+      registerSustained(id, () => {
+        window.clearTimeout(leadTimer);
+        voice?.stop();
+        bed?.stop();
+      });
+    },
+    [registerSustained],
+  );
+
   // Receive an incoming effect and route by kind, each honouring startDelayMs.
   const handleEffectDeliver = useCallback(
     (effect: DeliveredEffect) => {
@@ -505,8 +542,23 @@ function App() {
           scheduleEffect(effect.startDelayMs, () => enqueueMessage(effect));
           break;
 
-        case "audio":
+        case "audio": {
+          // A spoken effect with spooky treatment (whispers bed / echo / pan) is
+          // orchestrated specially; everything else is plain playback.
+          const isSpooky =
+            effect.source.via === "data" &&
+            (effect.whispers === true || effect.echo === true || effect.pan === true);
           scheduleEffect(effect.startDelayMs, () => {
+            if (isSpooky && effect.source.via === "data") {
+              playSpookyVoice(effect.id, effect.source.data, {
+                whispers: effect.whispers === true,
+                echo: effect.echo === true,
+                pan: effect.pan === true,
+                gain: effect.gain,
+                whisperGain: effect.whisperGain,
+              });
+              return;
+            }
             const handle = audio.play(effect.source, {
               gain: effect.gain,
               loop: effect.loop,
@@ -520,6 +572,7 @@ function App() {
             }
           });
           break;
+        }
 
         case "haptic":
           scheduleEffect(effect.startDelayMs, () => {
@@ -567,7 +620,7 @@ function App() {
         }
       }
     },
-    [scheduleEffect, enqueueMessage, registerSustained, setActiveAmbiance],
+    [scheduleEffect, enqueueMessage, registerSustained, setActiveAmbiance, playSpookyVoice],
   );
 
   // Called by ParchmentMessage when the current message fully exits.

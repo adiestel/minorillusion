@@ -81,6 +81,18 @@ export interface WhisperBedOptions {
   fadeOutMs?: number;
 }
 
+/** Knobs for a spoken (voice) effect with optional spooky treatment. */
+export interface VoiceOptions {
+  /** 0..1 voice level (default 1). */
+  gain?: number;
+  /** Add a feedback echo. */
+  echo?: boolean;
+  /** Slowly sweep the voice L↔R. */
+  pan?: boolean;
+  /** Called when the voice finishes (or fails to play). */
+  onEnded?: () => void;
+}
+
 interface AudioCapability {
   /** Prime audio from a user gesture so later programmatic playback is allowed. */
   unlock(): void;
@@ -91,6 +103,8 @@ interface AudioCapability {
   /** Play the dissonant-whispers bed (chained + crossfaded clips, looping).
    *  Returns a handle whose stop() fades it out. */
   playWhisperBed(opts?: WhisperBedOptions): AudioHandle;
+  /** Play a spoken (data:) effect with optional echo + L↔R panning. */
+  playVoice(dataUrl: string, opts?: VoiceOptions): AudioHandle;
   /** True when audio is blocked by a suspended context (a gesture is needed). */
   locked(): boolean;
   /** Subscribe to lock-state changes; fires immediately with the current state.
@@ -457,6 +471,101 @@ class WebAudio implements AudioCapability {
     };
     this.beds.add(entry);
     return { stop: entry.stop };
+  }
+
+  playVoice(dataUrl: string, opts: VoiceOptions = {}): AudioHandle {
+    const ctx = this.ensureCtx();
+    // No Web Audio → plain element playback (no fx); still fire onEnded.
+    if (ctx === null) {
+      const h = this.playElement(dataUrl, { gain: opts.gain });
+      if (opts.onEnded) window.setTimeout(opts.onEnded, 50);
+      return h;
+    }
+    if (ctx.state === "suspended") void ctx.resume();
+
+    const state = { stopped: false, cleanup: () => {} };
+
+    this.decode(dataUrl, false)
+      .then((buf) => {
+        if (state.stopped) return;
+        const node = ctx.createBufferSource();
+        node.buffer = buf;
+        const voice = ctx.createGain();
+        voice.gain.value = opts.gain ?? 1;
+        node.connect(voice);
+
+        // Echo: a feedback delay mixed with the dry signal.
+        let tail: AudioNode = voice;
+        const extra: AudioNode[] = [voice];
+        if (opts.echo) {
+          const merge = ctx.createGain();
+          voice.connect(merge); // dry
+          const delay = ctx.createDelay(1.0);
+          delay.delayTime.value = 0.28;
+          const fb = ctx.createGain();
+          fb.gain.value = 0.34;
+          const wet = ctx.createGain();
+          wet.gain.value = 0.55;
+          voice.connect(delay);
+          delay.connect(fb);
+          fb.connect(delay); // feedback loop
+          delay.connect(wet);
+          wet.connect(merge);
+          tail = merge;
+          extra.push(merge, delay, fb, wet);
+        }
+
+        // Pan: an LFO slowly sweeps a StereoPanner between L and R.
+        let lfo: OscillatorNode | null = null;
+        if (opts.pan && typeof ctx.createStereoPanner === "function") {
+          const panner = ctx.createStereoPanner();
+          lfo = ctx.createOscillator();
+          lfo.frequency.value = 0.18; // slow drift
+          const depth = ctx.createGain();
+          depth.gain.value = 0.7;
+          lfo.connect(depth).connect(panner.pan);
+          lfo.start();
+          tail.connect(panner);
+          panner.connect(ctx.destination);
+          extra.push(panner, depth);
+        } else {
+          tail.connect(ctx.destination);
+        }
+
+        state.cleanup = () => {
+          try {
+            lfo?.stop();
+            node.stop();
+          } catch {
+            /* already stopped */
+          }
+          try {
+            node.disconnect();
+            for (const n of extra) n.disconnect();
+            lfo?.disconnect();
+          } catch {
+            /* ignore */
+          }
+        };
+
+        node.onended = () => {
+          state.cleanup();
+          if (!state.stopped) opts.onEnded?.();
+        };
+        node.start();
+      })
+      .catch(() => {
+        // Decode/fetch failed — still let the caller proceed (e.g. end the bed).
+        if (!state.stopped) opts.onEnded?.();
+      });
+
+    return {
+      stop: () => {
+        if (state.stopped) return;
+        state.stopped = true;
+        state.cleanup();
+      },
+    };
   }
 
   /**
