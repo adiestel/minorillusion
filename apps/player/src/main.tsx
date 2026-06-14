@@ -27,6 +27,7 @@ import { ParchmentMessage } from "./ParchmentMessage";
 import { socket } from "./socket";
 import { deviceId } from "./deviceId";
 import { haptics } from "./capabilities/index";
+import { saveSession, loadSession, clearSession } from "./session";
 
 // ---------------------------------------------------------------------------
 // CSS-in-JS helpers (no build-time CSS needed; keeps the file self-contained)
@@ -120,74 +121,26 @@ function Ember({ size = 240 }: EmberProps) {
   return <div className="ember-glow" style={style} aria-hidden="true" />;
 }
 
-interface PresenceListProps {
-  players: Player[];
-  myPlayerId: string | undefined;
-}
+// Presence is intentionally NOT shown to players — no roster, no names, no text
+// (skeuomorphic rule, docs/DESIGN.md). If we ever want players to sense who's in
+// the circle, it'd be diegetic — small flames ringing the fire — never a list.
 
-function PresenceList({ players, myPlayerId }: PresenceListProps) {
-  const others = players.filter((p) => p.id !== myPlayerId);
+// ---------------------------------------------------------------------------
+// Reconnecting screen — shown while auto-rejoining on refresh
+// ---------------------------------------------------------------------------
 
-  const wrapStyle: CSSProperties = {
+/** Bare ember canvas shown while session reconnect is in progress. No text. */
+function ReconnectingScreen() {
+  const screenStyle: CSSProperties = {
     display: "flex",
-    flexDirection: "column",
     alignItems: "center",
-    gap: space(2),
-    marginTop: space(6),
-  };
-
-  const labelStyle: CSSProperties = {
-    fontSize: 11,
-    letterSpacing: "0.12em",
-    textTransform: "uppercase",
-    color: palette.ash,
-    userSelect: "none",
-  };
-
-  const listStyle: CSSProperties = {
-    display: "flex",
-    flexWrap: "wrap",
     justifyContent: "center",
-    gap: space(3),
-    maxWidth: 280,
+    height: "100%",
+    background: "var(--bg)",
   };
-
-  const nameStyle: CSSProperties = {
-    display: "flex",
-    alignItems: "center",
-    gap: space(1),
-    fontSize: 13,
-    color: palette.parchmentDim,
-    userSelect: "none",
-  };
-
-  const dotStyle: CSSProperties = {
-    width: 6,
-    height: 6,
-    borderRadius: "50%",
-    background: palette.ember,
-    flexShrink: 0,
-  };
-
-  if (others.length === 0) {
-    return (
-      <div style={wrapStyle}>
-        <span style={labelStyle}>waiting for others</span>
-      </div>
-    );
-  }
-
   return (
-    <div style={wrapStyle}>
-      <span style={labelStyle}>in the circle</span>
-      <div style={listStyle}>
-        {others.map((p) => (
-          <span key={p.id} style={nameStyle}>
-            <span className="presence-dot" style={dotStyle} aria-hidden="true" />
-            {p.name}
-          </span>
-        ))}
-      </div>
+    <div style={screenStyle}>
+      <Ember size={200} />
     </div>
   );
 }
@@ -374,33 +327,22 @@ interface JoinedScreenProps {
   state: JoinedState;
 }
 
-function JoinedScreen({ state }: JoinedScreenProps) {
+function JoinedScreen(_props: JoinedScreenProps) {
+  // Skeuomorphic / diegetic rule (docs/DESIGN.md): the joined/resting state is
+  // JUST the breathing ember on near-black — no name, no presence roster, no
+  // text. The fire being lit IS the feedback that you're in the circle.
+  // Presence is the GM's concern (players see each other at the table).
   const screenStyle: CSSProperties = {
     display: "flex",
-    flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
     height: "100%",
     background: "var(--bg)",
-    gap: 0,
-  };
-
-  const nameStyle: CSSProperties = {
-    fontSize: 13,
-    letterSpacing: "0.14em",
-    textTransform: "uppercase",
-    color: palette.ash,
-    marginTop: space(8),
-    userSelect: "none",
   };
 
   return (
     <div className="fade-in" style={screenStyle}>
       <Ember size={200} />
-
-      <span style={nameStyle}>{state.playerName}</span>
-
-      <PresenceList myPlayerId={state.playerId} players={state.players} />
     </div>
   );
 }
@@ -411,10 +353,14 @@ function JoinedScreen({ state }: JoinedScreenProps) {
 
 type AppState =
   | { screen: "join" }
+  | { screen: "reconnecting" }
   | { screen: "joined"; joined: JoinedState };
 
 function App() {
-  const [appState, setAppState] = useState<AppState>({ screen: "join" });
+  // Initialise to "reconnecting" if a stored session exists, "join" otherwise.
+  const [appState, setAppState] = useState<AppState>(() =>
+    loadSession() !== null ? { screen: "reconnecting" } : { screen: "join" },
+  );
 
   // ---------------------------------------------------------------------------
   // Parchment message queue — M1 effect:deliver handling
@@ -489,8 +435,45 @@ function App() {
     };
   }, []);
 
+  // ---------------------------------------------------------------------------
+  // Auto-rejoin on mount when a stored session exists
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    const session = loadSession();
+    if (session === null) return; // no stored session — nothing to do
+
+    // Already in "reconnecting" state (set by useState initialiser above).
+    if (!socket.connected) socket.connect();
+
+    socket.emit(
+      "circle:join",
+      { code: session.code, name: session.name, deviceId },
+      (result: JoinResult) => {
+        if (result.ok) {
+          setAppState({
+            screen: "joined",
+            joined: {
+              circleId: result.circle.id,
+              playerId: result.player.id,
+              playerName: result.player.name,
+              players: [result.player],
+            },
+          });
+        } else {
+          clearSession();
+          setAppState({ screen: "join" });
+        }
+      },
+    );
+    // Intentionally runs only once on mount — no deps needed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleJoined = useCallback(
     (result: Extract<JoinResult, { ok: true }>) => {
+      // Persist the session so a future refresh can auto-rejoin.
+      saveSession({ code: result.circle.code, name: result.player.name });
       setAppState({
         screen: "joined",
         joined: {
@@ -508,6 +491,8 @@ function App() {
     <>
       {appState.screen === "joined" ? (
         <JoinedScreen state={appState.joined} />
+      ) : appState.screen === "reconnecting" ? (
+        <ReconnectingScreen />
       ) : (
         <JoinScreen onJoined={handleJoined} />
       )}

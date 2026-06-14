@@ -1,442 +1,164 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { MessageEffect } from "@minorillusion/contract";
+import { socket } from "./socket";
+import { haptics } from "./capabilities/index";
+
 /**
- * ParchmentMessage — M1 parchment text effect.
+ * The parchment message — DOM/CSS (the cheap path, done right). A real parchment
+ * texture on a layer whose edge is roughened into an organic torn/deckled
+ * silhouette by an SVG displacement filter (the drop-shadow follows it; the ink
+ * stays crisp on top). Restrained fade-and-rise entrance, ink fades in after the
+ * page settles, IM Fell English type. No 3D, no scaling. (Rebuilt after the M1
+ * review; see docs/DESIGN.md.) The dismissal is a tasteful fade-and-sink for now;
+ * the acknowledge "burn" can be upgraded to a pre-rendered Veo clip later.
  *
- * Renders an ink-on-weathered-parchment overlay for GM-sent messages.
- * Three modes keyed on MessageEffect.mode:
- *
- *   acknowledge  — unfurl + ink-in, haptic on arrival, stays until tapped;
- *                  tap → burn-to-ash (charring edges/embers) → emit effect:ack.
- *
- *   auto_dismiss — unfurl + ink-in, auto-refolds/fades after autoDismissMs
- *                  (fallback 6000 ms); no ack emitted.
- *
- *   silent       — no haptic; ambient ember edge-glow; gentle unfurl.
- *                  Fades on its own after autoDismissMs (fallback 8000 ms).
- *
- * Rendering strategy: cheap DOM/CSS path only (DESIGN.md).
- * No WebGL, no external image assets, no new runtime dependencies.
+ * Contract (see main.tsx): props { effect, onDone }; acknowledge emits effect:ack
+ * on dismiss; haptics on arrival/tap.
  */
 
-import {
-  useEffect,
-  useRef,
-  useState,
-  useCallback,
-  CSSProperties,
-} from "react";
+const PARCHMENT_URL = "/textures/parchment.jpg";
+const EXIT_MS = 700;
 
-import type { MessageEffect } from "@minorillusion/contract";
-import { palette, space } from "@minorillusion/design-system";
-import { haptics } from "./capabilities/index";
-import { socket } from "./socket";
+function injectStyles(): void {
+  if (document.getElementById("mi-parchment-styles")) return;
 
-// ---------------------------------------------------------------------------
-// CSS keyframes injected once
-// ---------------------------------------------------------------------------
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href =
+    "https://fonts.googleapis.com/css2?family=IM+Fell+English&display=swap";
+  document.head.appendChild(link);
 
-let stylesInjected = false;
-
-function injectParchmentStyles() {
-  if (stylesInjected) return;
-  stylesInjected = true;
+  // feTurbulence + feDisplacementMap roughens the paper edge into a torn/deckled
+  // silhouette ("more torn" level from the M1 study). Applied to the bg layer
+  // only, so the ink stays crisp; the drop-shadow then follows the torn shape.
+  const svg = document.createElement("div");
+  svg.id = "mi-parchment-svg";
+  svg.setAttribute("aria-hidden", "true");
+  svg.style.cssText = "position:absolute;width:0;height:0;overflow:hidden";
+  svg.innerHTML =
+    '<svg><defs><filter id="mi-torn" x="-25%" y="-25%" width="150%" height="150%">' +
+    '<feTurbulence type="fractalNoise" baseFrequency="0.016" numOctaves="3" seed="19" result="n"/>' +
+    '<feDisplacementMap in="SourceGraphic" in2="n" scale="20" xChannelSelector="R" yChannelSelector="G"/>' +
+    "</filter></defs></svg>";
+  document.body.appendChild(svg);
 
   const style = document.createElement("style");
   style.id = "mi-parchment-styles";
   style.textContent = `
-    /* ---- entrance: the scroll unfurls from a thin rolled sliver ---- */
-    @keyframes parchment-unfurl {
-      0%   { transform: scaleY(0.04) scaleX(0.85); opacity: 0; }
-      30%  { transform: scaleY(0.6)  scaleX(0.96); opacity: 0.7; }
-      70%  { transform: scaleY(1.04) scaleX(1.02); }
-      100% { transform: scaleY(1)    scaleX(1);    opacity: 1; }
+    @keyframes mi-scrim-in { from { opacity: 0 } to { opacity: 1 } }
+    @keyframes mi-page-in {
+      from { opacity: 0; transform: translateY(22px) }
+      to   { opacity: 1; transform: translateY(0) }
     }
+    @keyframes mi-page-out {
+      from { opacity: 1; transform: translateY(0);  filter: brightness(1) }
+      to   { opacity: 0; transform: translateY(16px); filter: brightness(.35) saturate(.5) }
+    }
+    @keyframes mi-ink-in { from { opacity: 0 } to { opacity: 1 } }
 
-    /* ---- silent variant: softer, slower entrance ---- */
-    @keyframes parchment-unfurl-gentle {
-      0%   { transform: scaleY(0.1) scaleX(0.9); opacity: 0; }
-      100% { transform: scaleY(1)   scaleX(1);   opacity: 1; }
+    .mi-msg-scrim {
+      position: fixed; inset: 0; z-index: 60;
+      display: flex; align-items: center; justify-content: center;
+      animation: mi-scrim-in .55s ease forwards;
     }
-
-    /* ---- ink reveal: left-to-right unmask ---- */
-    @keyframes ink-reveal {
-      from { clip-path: inset(0 100% 0 0); }
-      to   { clip-path: inset(0 0%   0 0); }
+    .mi-msg-scrim.is-focus {
+      background: radial-gradient(ellipse at center, rgba(0,0,0,.42) 0%, rgba(0,0,0,.8) 100%);
     }
-
-    /* ---- auto-dismiss: refold / fade away ---- */
-    @keyframes parchment-refold {
-      0%   { transform: scaleY(1)    scaleX(1);    opacity: 1; }
-      40%  { transform: scaleY(0.92) scaleX(0.98); opacity: 0.85; }
-      100% { transform: scaleY(0.05) scaleX(0.8);  opacity: 0; }
+    .mi-msg-scrim.is-quiet {
+      background: radial-gradient(ellipse at center, transparent 55%, rgba(120,55,20,.10) 100%);
+      pointer-events: none;
     }
-
-    /* ---- burn: charring edges eaten away with ember glow ---- */
-    @keyframes parchment-char {
-      0%   {
-        filter: brightness(1) sepia(0);
-        box-shadow: 0 0 0px transparent inset;
-      }
-      25%  {
-        filter: brightness(0.9) sepia(0.4);
-      }
-      60%  {
-        filter: brightness(0.5) sepia(1) hue-rotate(-15deg);
-        box-shadow:
-          0 0 18px 10px #ff6b2d55 inset,
-          0 0 6px 2px  #ff2200aa inset;
-        opacity: 0.8;
-      }
-      100% {
-        filter: brightness(0.1) sepia(1) hue-rotate(-20deg) contrast(2);
-        box-shadow:
-          0 0 40px 20px #ff2200 inset,
-          0 0 80px 40px #ff6b2d inset;
-        opacity: 0;
-        transform: scaleY(0.15) scaleX(0.9);
-      }
+    .mi-page {
+      position: relative;
+      width: min(80vw, 430px); min-height: 220px;
+      padding: 58px 52px;
+      display: flex; align-items: center; justify-content: center;
+      color: #241608;
+      animation: mi-page-in .9s cubic-bezier(.16,.8,.3,1) forwards;
+      will-change: opacity, transform;
     }
-
-    /* ---- floating ember particles that drift upward on burn ---- */
-    @keyframes ember-rise-1 {
-      0%   { transform: translate(0,    0)   scale(1);   opacity: 1; }
-      100% { transform: translate(-18px,-80px) scale(0.3); opacity: 0; }
+    .mi-page.is-out { animation: mi-page-out ${EXIT_MS}ms ease forwards; }
+    .mi-paper {
+      position: absolute; inset: 0; z-index: 0;
+      background:
+        radial-gradient(ellipse at center, transparent 42%, rgba(35,20,8,.5) 100%),
+        url('${PARCHMENT_URL}') center / cover;
+      filter: url(#mi-torn) drop-shadow(0 24px 58px rgba(0,0,0,.75));
     }
-    @keyframes ember-rise-2 {
-      0%   { transform: translate(0,    0)   scale(1);   opacity: 1; }
-      100% { transform: translate(22px, -70px) scale(0.2); opacity: 0; }
-    }
-    @keyframes ember-rise-3 {
-      0%   { transform: translate(0,    0)   scale(1);   opacity: 1; }
-      100% { transform: translate(-5px, -95px) scale(0.25); opacity: 0; }
-    }
-    @keyframes ember-rise-4 {
-      0%   { transform: translate(0,    0)   scale(1);   opacity: 0.8; }
-      100% { transform: translate(30px, -60px) scale(0.15); opacity: 0; }
-    }
-
-    /* ---- silent edge glow: slow, ambient pulse on screen rim ---- */
-    @keyframes silent-rim-glow {
-      0%, 100% { opacity: 0.18; }
-      50%      { opacity: 0.42; }
-    }
-
-    /* ---- silent parchment: very faint presence pulse ---- */
-    @keyframes parchment-silent-pulse {
-      0%, 100% { opacity: 0.82; }
-      50%      { opacity: 0.95; }
-    }
-
-    /* ---- acknowledge tap: haptic ripple visual feedback ---- */
-    @keyframes tap-ripple {
-      0%   { transform: scale(0.95); box-shadow: 0 0 0 0 ${palette.ember}55; }
-      50%  { transform: scale(1.01); box-shadow: 0 0 0 12px ${palette.ember}00; }
-      100% { transform: scale(1);   box-shadow: 0 0 0 0   transparent; }
+    .mi-ink {
+      position: relative; z-index: 1; text-align: center;
+      font-family: 'IM Fell English', Georgia, serif;
+      font-size: clamp(19px, 5.4vw, 24px); line-height: 1.62;
+      text-wrap: balance;
+      opacity: 0; animation: mi-ink-in 1.1s ease .5s forwards;
     }
   `;
   document.head.appendChild(style);
 }
 
-// ---------------------------------------------------------------------------
-// Ember particle (shown during burn-to-ash)
-// ---------------------------------------------------------------------------
-
-interface EmberParticleProps {
-  x: number;       // horizontal % offset within parchment
-  y: number;       // vertical % offset
-  delay: number;   // animation delay ms
-  anim: string;    // keyframe name
-}
-
-function EmberParticle({ x, y, delay, anim }: EmberParticleProps) {
-  const style: CSSProperties = {
-    position: "absolute",
-    left: `${x}%`,
-    top: `${y}%`,
-    width: 5,
-    height: 5,
-    borderRadius: "50%",
-    background: palette.ember,
-    boxShadow: `0 0 6px 2px ${palette.ember}`,
-    animation: `${anim} 0.9s ease-out ${delay}ms forwards`,
-    pointerEvents: "none",
-  };
-  return <div style={style} aria-hidden="true" />;
-}
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-type Phase =
-  | "entering"   // unfurl animation playing
-  | "reading"    // fully visible, waiting for interaction
-  | "dismissing" // burn-to-ash or refold playing
-  | "gone";      // removed from DOM
-
-// ---------------------------------------------------------------------------
-// ParchmentMessage component
-// ---------------------------------------------------------------------------
-
 export interface ParchmentMessageProps {
   effect: MessageEffect;
-  onDone: () => void;  // call when the message is fully dismissed
+  onDone: () => void;
 }
 
 export function ParchmentMessage({ effect, onDone }: ParchmentMessageProps) {
-  injectParchmentStyles();
+  const [exiting, setExiting] = useState(false);
+  const done = useRef(false);
 
-  const { id, body, mode, autoDismissMs } = effect;
-  const [phase, setPhase] = useState<Phase>("entering");
-  const [burning, setBurning] = useState(false);
-  const burnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const autoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Unfurl duration: silent is gentler/longer
-  const unfurlDurationMs = mode === "silent" ? 1400 : 900;
-  // Ink-in starts slightly after unfurl
-  const inkDelayMs = mode === "silent" ? 500 : 300;
-  const inkDurationMs = Math.min(Math.max(body.length * 22, 1200), 3600);
-
-  // Transition to "reading" after unfurl animation
   useEffect(() => {
-    const t = setTimeout(() => {
-      setPhase("reading");
-    }, unfurlDurationMs + 80);
-    return () => clearTimeout(t);
-  }, [unfurlDurationMs]);
-
-  // Haptic on arrival (acknowledge and auto_dismiss only)
-  useEffect(() => {
-    if (mode === "acknowledge") {
-      haptics.vibrate([20, 30, 60]);
-    } else if (mode === "auto_dismiss") {
-      haptics.vibrate([15, 20, 40]);
-    }
+    injectStyles();
+    if (effect.mode === "acknowledge") haptics.vibrate([18, 30, 50]);
+    else if (effect.mode === "auto_dismiss") haptics.vibrate([14, 24]);
     // silent: no haptic
-  }, [mode]);
+  }, [effect.mode]);
 
-  // Auto-dismiss timer (auto_dismiss and silent modes)
+  const finish = useCallback(() => {
+    if (done.current) return;
+    done.current = true;
+    setExiting(true);
+    window.setTimeout(() => {
+      if (effect.mode === "acknowledge") {
+        socket.emit("effect:ack", { effectId: effect.id });
+      }
+      onDone();
+    }, EXIT_MS);
+  }, [effect.id, effect.mode, onDone]);
+
+  // auto_dismiss / silent linger, then exit on their own.
   useEffect(() => {
-    if (mode !== "acknowledge") {
-      const delay =
-        mode === "silent"
-          ? (autoDismissMs ?? 8000) + inkDelayMs + inkDurationMs
-          : (autoDismissMs ?? 6000);
-      autoTimerRef.current = setTimeout(() => {
-        setPhase("dismissing");
-      }, delay);
-    }
-    return () => {
-      if (autoTimerRef.current !== null) clearTimeout(autoTimerRef.current);
-    };
-  }, [mode, autoDismissMs, inkDelayMs, inkDurationMs]);
+    if (effect.mode === "acknowledge") return;
+    const linger =
+      effect.autoDismissMs ?? (effect.mode === "silent" ? 8000 : 6000);
+    const t = window.setTimeout(finish, linger + 600);
+    return () => window.clearTimeout(t);
+  }, [effect.mode, effect.autoDismissMs, finish]);
 
-  // After dismiss animation completes, call onDone
-  const dismissDurationMs = mode === "acknowledge" ? 950 : 700;
-  useEffect(() => {
-    if (phase === "dismissing") {
-      burnTimerRef.current = setTimeout(() => {
-        // Emit ack only for acknowledge mode
-        if (mode === "acknowledge") {
-          socket.emit("effect:ack", { effectId: id });
-        }
-        setPhase("gone");
-        onDone();
-      }, dismissDurationMs);
-    }
-    return () => {
-      if (burnTimerRef.current !== null) clearTimeout(burnTimerRef.current);
-    };
-  }, [phase, mode, id, onDone, dismissDurationMs]);
-
-  // Tap handler for acknowledge mode
-  const handleTap = useCallback(() => {
-    if (mode !== "acknowledge" || phase !== "reading") return;
-    setBurning(true);
-    haptics.vibrate([10, 20, 30, 20, 60]);
-    setPhase("dismissing");
-  }, [mode, phase]);
-
-  if (phase === "gone") return null;
-
-  // ---------------------------------------------------------------------------
-  // Style computation
-  // ---------------------------------------------------------------------------
-
-  const isDismissing = phase === "dismissing";
-
-  // Backdrop: near-black scrim (lighter for silent)
-  const backdropStyle: CSSProperties = {
-    position: "fixed",
-    inset: 0,
-    zIndex: 100,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    // silent: no dark scrim, stays ambient
-    background:
-      mode === "silent"
-        ? "transparent"
-        : `${palette.nearBlack}cc`,
-    // silent rim glow is applied as a box-shadow on the viewport frame
-    boxShadow:
-      mode === "silent"
-        ? `inset 0 0 80px 30px ${palette.ember}44, inset 0 0 30px 10px ${palette.emberDim}66`
-        : "none",
-    animation:
-      mode === "silent" ? "silent-rim-glow 3.2s ease-in-out infinite" : "none",
-    pointerEvents: mode === "acknowledge" ? "auto" : "none",
-  };
-
-  // Entrance animation
-  let entranceAnim: string;
-  if (mode === "silent") {
-    entranceAnim = `parchment-unfurl-gentle ${unfurlDurationMs}ms cubic-bezier(0.22,1,0.36,1) forwards`;
-  } else {
-    entranceAnim = `parchment-unfurl ${unfurlDurationMs}ms cubic-bezier(0.22,1,0.36,1) forwards`;
-  }
-
-  // Exit animation
-  let exitAnim: string;
-  if (isDismissing && burning) {
-    exitAnim = `parchment-char ${dismissDurationMs}ms ease-in forwards`;
-  } else if (isDismissing) {
-    exitAnim = `parchment-refold ${dismissDurationMs}ms ease-in forwards`;
-  } else {
-    exitAnim = "none";
-  }
-
-  const isAnimatingOut = isDismissing;
-  const silentPulse =
-    mode === "silent" && !isAnimatingOut
-      ? "parchment-silent-pulse 3.8s ease-in-out infinite"
-      : "none";
-
-  // Parchment panel
-  const parchmentStyle: CSSProperties = {
-    position: "relative",
-    width: "min(82vw, 360px)",
-    maxHeight: "72vh",
-    overflowY: "auto",
-    // Weathered parchment via CSS gradients — no external images
-    background: `
-      radial-gradient(ellipse at 20% 15%, #f5edce 0%, transparent 55%),
-      radial-gradient(ellipse at 80% 80%, #e4d4a8 0%, transparent 50%),
-      radial-gradient(ellipse at 50% 50%, #eddfc2 0%, #d9c98d 100%)
-    `,
-    // Aged texture: subtle noise-like pattern via repeating gradients + filters
-    backgroundBlendMode: "multiply",
-    // Border — ragged edge suggestion via irregular box-shadow layers
-    boxShadow: `
-      0 0 0 1px ${palette.ink}88,
-      0 2px 12px 0 ${palette.nearBlack}cc,
-      inset 0 0 30px 6px #b8a26e44,
-      inset 0 0 8px 2px #c9a94a22
-    `,
-    borderRadius: "3px 5px 4px 3px / 4px 3px 5px 4px",
-    padding: `${space(7)} ${space(6)} ${space(6)}`,
-    // Apply the filter that ages + softens the surface
-    filter: "sepia(0.18) contrast(1.04) brightness(0.97)",
-    // Cursor for acknowledge mode
-    cursor: mode === "acknowledge" && phase === "reading" ? "pointer" : "default",
-    // Stack: entrance first, then exit (exit overwrites when dismissing)
-    animation: isAnimatingOut
-      ? exitAnim
-      : phase === "reading" && silentPulse !== "none"
-      ? silentPulse
-      : entranceAnim,
-    userSelect: "none",
-    WebkitUserSelect: "none",
-    transformOrigin: "center center",
-    // Tap affordance hint for acknowledge
-    touchAction: "manipulation",
-  };
-
-  // Ink text — serif/handwriting font stack
-  const textStyle: CSSProperties = {
-    fontFamily:
-      '"Palatino Linotype", Palatino, "Book Antiqua", Georgia, "Times New Roman", serif',
-    fontSize: 17,
-    lineHeight: 1.72,
-    color: "#1a1208",
-    letterSpacing: "0.012em",
-    wordBreak: "break-word",
-    // Ink-reveal: left-to-right clip-path animation
-    animation:
-      !isAnimatingOut
-        ? `ink-reveal ${inkDurationMs}ms ease-out ${inkDelayMs}ms both`
-        : "none",
-    // Very subtle ink bleed simulation
-    textShadow: "0 0 1px #1a120888",
-  };
-
-  // Decorative top rule — a faint horizontal line suggestive of a seal bar
-  const rulerStyle: CSSProperties = {
-    display: "block",
-    width: "100%",
-    height: 1,
-    background: `linear-gradient(to right, transparent, ${palette.ink}55, ${palette.ink}88, ${palette.ink}55, transparent)`,
-    marginBottom: space(5),
-    borderRadius: "1px",
-  };
-
-  // Tap hint (acknowledge mode, reading phase only)
-  const tapHintStyle: CSSProperties = {
-    display: "block",
-    textAlign: "center",
-    marginTop: space(5),
-    fontSize: 10,
-    letterSpacing: "0.18em",
-    textTransform: "uppercase",
-    color: palette.emberDim,
-    fontFamily:
-      '"Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif',
-    opacity: phase === "reading" ? 0.7 : 0,
-    transition: "opacity 0.6s ease",
-  };
-
-  // Ember particles: only during burn
-  const particleData: Array<{ x: number; y: number; delay: number; anim: string }> =
-    burning
-      ? [
-          { x: 15, y: 70, delay: 0,   anim: "ember-rise-1" },
-          { x: 50, y: 55, delay: 80,  anim: "ember-rise-2" },
-          { x: 75, y: 65, delay: 160, anim: "ember-rise-3" },
-          { x: 35, y: 80, delay: 240, anim: "ember-rise-4" },
-          { x: 60, y: 40, delay: 120, anim: "ember-rise-1" },
-          { x: 25, y: 45, delay: 300, anim: "ember-rise-2" },
-        ]
-      : [];
+  const acknowledge = effect.mode === "acknowledge";
+  const onTap = acknowledge
+    ? () => {
+        haptics.vibrate([10, 20, 40]);
+        finish();
+      }
+    : undefined;
 
   return (
-    <div style={backdropStyle} aria-modal={mode !== "silent"} role={mode !== "silent" ? "dialog" : "status"} aria-label="Message from GM">
+    <div
+      className={`mi-msg-scrim ${effect.mode === "silent" ? "is-quiet" : "is-focus"}`}
+      onClick={onTap}
+    >
       <div
-        style={parchmentStyle}
-        onClick={handleTap}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") handleTap();
-        }}
-        role={mode === "acknowledge" ? "button" : undefined}
-        tabIndex={mode === "acknowledge" ? 0 : undefined}
-        aria-label={mode === "acknowledge" ? "Dismiss message" : undefined}
+        className={`mi-page${exiting ? " is-out" : ""}`}
+        onClick={
+          onTap
+            ? (e) => {
+                e.stopPropagation();
+                onTap();
+              }
+            : undefined
+        }
       >
-        {/* Decorative top rule */}
-        <span style={rulerStyle} aria-hidden="true" />
-
-        {/* The message body — ink writing itself in */}
-        <p style={textStyle}>{body}</p>
-
-        {/* Tap-to-dismiss hint for acknowledge mode */}
-        {mode === "acknowledge" && (
-          <span style={tapHintStyle} aria-hidden="true">
-            touch to release
-          </span>
-        )}
-
-        {/* Ember particles on burn */}
-        {particleData.map((p, i) => (
-          <EmberParticle key={i} {...p} />
-        ))}
+        <div className="mi-paper" aria-hidden="true" />
+        <p className="mi-ink">{effect.body}</p>
       </div>
     </div>
   );

@@ -1,5 +1,9 @@
 # Design Language & Rendering
 
+## Core principle: diegetic & skeuomorphic (inviolable)
+
+The player's immersive views are **skeuomorphic and diegetic — no floating UI text, labels, or app-chrome.** Information is conveyed through in-world objects and effects, not captions. The resting state is *only* the breathing ember on near-black; a player's name, presence rosters, and status text do **not** belong on the immersive canvas. If presence must be shown to players at all, it is rendered diegetically (e.g. small flames ringing the central fire), never as text. Plain text and controls live only on explicit menu/liminal surfaces (the join/code-entry screen, settings). Treat this as inviolable as the safety rules. *(Established at the M1 design review — the first parchment build violated it with on-screen name/roster text.)*
+
 ## Theme: the circle around the fire
 The organizing metaphor is a campfire circle, and it maps onto every system concept:
 - **Join** = enter the circle (tap the hearth).

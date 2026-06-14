@@ -36,5 +36,9 @@ Thumbs.db
 # Coverage
 coverage/
 
+# Generated asset candidates + scratch visual harnesses (approved assets go in apps/*/public)
+assets/generated/
+assets/demo/
+
 # Personal Claude settings
 .claude/settings.local.json

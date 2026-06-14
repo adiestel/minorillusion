@@ -4,7 +4,9 @@
 Sequenced to de-risk: a thin slice runs end-to-end early (tracer bullet), the cheap-path "wow" lands before the GPU complexity, native/device testing starts as soon as a native capability appears, and the hardest external dependencies come last. **Claude implements, user reviews — working code, milestone by milestone.**
 
 ## Current status
-**M1 complete.** ✓ The full actor→router→target effect pipeline works: the GM sends a parchment message (acknowledge / auto_dismiss / silent) to a target or broadcast; the player renders it as ink-on-parchment (burn-to-ash acknowledge, refold auto-dismiss, silent ember-glow) and acks back to the GM. 30 unit tests pass (contract 7, server 23); `scripts/smoke-m1.mjs` + `smoke-m0.mjs` pass end-to-end. **Next action: M2 — effect engine + cheap-path core effects (audio/TTS, haptics, ember, storm-via-video, heartbeat) + GM soundboard. ← native capabilities + physical-device testing begin here.**
+**M1 complete.** ✓ The full actor→router→target effect pipeline works: the GM sends a parchment message (acknowledge / auto_dismiss / silent) to a target or broadcast; the player renders it as ink-on-parchment (burn-to-ash acknowledge, refold auto-dismiss, silent ember-glow) and acks back to the GM. 30 unit tests pass (contract 7, server 23); `scripts/smoke-m1.mjs` + `smoke-m0.mjs` pass end-to-end. **Post-M1 design-review polish (done):** parchment rebuilt as clean **DOM/CSS** — IM Fell English, a torn/deckled edge (SVG displacement filter), restrained fade-and-rise + ink fade-in (the 3D attempt was tried and reverted — see DECISIONS D13); the **skeuomorphic rule** enforced (the joined/resting state is now just the breathing ember — no name/roster text); and **session reconnect** added (player auto-rejoin + GM circle restore + a Leave control).
+
+**Next action: M2 — effect engine + cheap-path core effects (audio/TTS, haptics, ember, storm-via-video, heartbeat) + GM soundboard. ← native capabilities + physical-device testing begin here.**
 
 ## Milestones
 

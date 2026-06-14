@@ -14,6 +14,9 @@
     "@capacitor/core": "^6.2.0",
     "@minorillusion/contract": "workspace:*",
     "@minorillusion/design-system": "workspace:*",
+    "@react-three/drei": "^9.120.4",
+    "@react-three/fiber": "^8.17.10",
+    "three": "^0.171.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "socket.io-client": "^4.8.1"
@@ -21,6 +24,7 @@
   "devDependencies": {
     "@capacitor/cli": "^6.2.0",
     "@types/node": "^22.10.2",
+    "@types/three": "^0.171.0",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",

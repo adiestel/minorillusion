@@ -2,6 +2,10 @@
  * GM control surface — M0.
  * Lets the GM create a circle or open an existing one, then watches
  * players join/leave in real time via presence:update.
+ *
+ * Session restore (added): the active circle code is persisted in
+ * localStorage under `mi.gm.circle` so a page refresh re-attaches
+ * the GM automatically via circle:open.
  */
 import {
   useCallback,
@@ -22,21 +26,58 @@ import { socket } from "./socket";
 import { MessageComposer } from "./MessageComposer";
 
 // ---------------------------------------------------------------------------
+// Session-restore helpers
+// ---------------------------------------------------------------------------
+
+const CIRCLE_KEY = "mi.gm.circle";
+
+function persistCircleCode(code: string): void {
+  try {
+    localStorage.setItem(CIRCLE_KEY, code);
+  } catch {
+    // storage not available — silently ignore
+  }
+}
+
+function clearCircleCode(): void {
+  try {
+    localStorage.removeItem(CIRCLE_KEY);
+  } catch {
+    // storage not available — silently ignore
+  }
+}
+
+function loadCircleCode(): string | null {
+  try {
+    return localStorage.getItem(CIRCLE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
 
 type AppState =
   | { phase: "idle" }
+  | { phase: "restoring" }
   | { phase: "active"; circle: Circle; players: Player[] };
 
 type AppAction =
   | { type: "circle_opened"; circle: Circle; players: Player[] }
-  | { type: "presence_update"; update: PresenceUpdate };
+  | { type: "restore_failed" }
+  | { type: "presence_update"; update: PresenceUpdate }
+  | { type: "leave" };
 
 function appReducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case "circle_opened":
       return { phase: "active", circle: action.circle, players: action.players };
+    case "restore_failed":
+      return { phase: "idle" };
+    case "leave":
+      return { phase: "idle" };
     case "presence_update":
       if (state.phase !== "active") return state;
       if (action.update.circleId !== state.circle.id) return state;
@@ -49,7 +90,11 @@ function appReducer(state: AppState, action: AppAction): AppState {
 // ---------------------------------------------------------------------------
 
 export function App() {
-  const [state, dispatch] = useReducer(appReducer, { phase: "idle" });
+  const savedCode = loadCircleCode();
+  const [state, dispatch] = useReducer(
+    appReducer,
+    savedCode !== null ? { phase: "restoring" } : { phase: "idle" },
+  );
   const [connected, setConnected] = useState(socket.connected);
 
   // Subscribe to socket lifecycle and presence:update once.
@@ -70,12 +115,47 @@ export function App() {
     };
   }, []);
 
+  // Session restore: on mount, if a saved code exists, attempt circle:open.
+  // We wait until the socket is connected before emitting.
+  useEffect(() => {
+    const code = loadCircleCode();
+    if (code === null) return;
+
+    function attempt() {
+      if (code === null) return;
+      socket.emit("circle:open", { code }, (result: OpenCircleResult) => {
+        if (result.ok) {
+          persistCircleCode(result.circle.code);
+          dispatch({ type: "circle_opened", circle: result.circle, players: result.players });
+        } else {
+          clearCircleCode();
+          dispatch({ type: "restore_failed" });
+        }
+      });
+    }
+
+    if (socket.connected) {
+      attempt();
+    } else {
+      // Wait for the first successful connection, then restore.
+      socket.once("connect", attempt);
+      return () => { socket.off("connect", attempt); };
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleCircleReady = useCallback(
     (circle: Circle, players: Player[]) => {
+      persistCircleCode(circle.code);
       dispatch({ type: "circle_opened", circle, players });
     },
     [],
   );
+
+  const handleLeave = useCallback(() => {
+    clearCircleCode();
+    dispatch({ type: "leave" });
+  }, []);
 
   const vars = themeVars(gmTheme) as Record<string, string>;
 
@@ -97,10 +177,12 @@ export function App() {
 
       {/* Main */}
       <main style={{ padding: `${space(8)} ${space(5)}`, maxWidth: "520px", margin: "0 auto" }}>
-        {state.phase === "idle" ? (
+        {state.phase === "restoring" ? (
+          <RestoringView />
+        ) : state.phase === "idle" ? (
           <LandingPanel onReady={handleCircleReady} connected={connected} />
         ) : (
-          <CirclePanel circle={state.circle} players={state.players} />
+          <CirclePanel circle={state.circle} players={state.players} onLeave={handleLeave} />
         )}
       </main>
     </div>
@@ -218,15 +300,28 @@ function LandingPanel({ onReady, connected }: LandingPanelProps) {
 }
 
 // ---------------------------------------------------------------------------
+// RestoringView — shown briefly while we attempt session restore
+// ---------------------------------------------------------------------------
+
+function RestoringView() {
+  return (
+    <p style={{ color: "var(--text-dim)", fontSize: "0.92rem" }}>
+      Restoring session…
+    </p>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // CirclePanel — active circle: join code + live presence list
 // ---------------------------------------------------------------------------
 
 interface CirclePanelProps {
   circle: Circle;
   players: Player[];
+  onLeave: () => void;
 }
 
-function CirclePanel({ circle, players }: CirclePanelProps) {
+function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: space(8) }}>
       {/* Join code — prominent */}
@@ -293,6 +388,22 @@ function CirclePanel({ circle, players }: CirclePanelProps) {
 
       {/* M1 — message composer */}
       <MessageComposer players={players} />
+
+      <Divider />
+
+      {/* Leave control — detaches this browser only; does not end the circle server-side */}
+      <section style={sectionStyle}>
+        <h2 style={sectionHeadingStyle}>Session</h2>
+        <p style={{ margin: `0 0 ${space(4)}`, color: "var(--text-dim)", fontSize: "0.88rem" }}>
+          Leave this circle on this device. The circle stays active for your players.
+        </p>
+        <button
+          style={leaveButtonStyle}
+          onClick={onLeave}
+        >
+          Leave circle
+        </button>
+      </section>
     </div>
   );
 }
@@ -417,3 +528,16 @@ function primaryButtonStyle(disabled: boolean): React.CSSProperties {
     alignSelf: "flex-start",
   };
 }
+
+const leaveButtonStyle: React.CSSProperties = {
+  padding: `${space(2)} ${space(4)}`,
+  background: "transparent",
+  color: "var(--text-dim)",
+  border: `1px solid ${palette.ash}`,
+  borderRadius: radius.md,
+  fontWeight: 600,
+  fontSize: "0.85rem",
+  cursor: "pointer",
+  transition: "color 0.15s, border-color 0.15s",
+  alignSelf: "flex-start",
+};
