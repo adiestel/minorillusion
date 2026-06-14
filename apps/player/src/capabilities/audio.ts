@@ -1,16 +1,19 @@
 /**
  * AudioCapability — the sound seam (DECISIONS.md D8).
  *
- * A single web implementation, exported as the `audio` singleton. It is the
- * cheap path: bundled .mp3 cues + inline data: URLs played through
- * HTMLAudioElement, no WebAudio synthesis. Works identically native (Capacitor
- * serves the web layer) and as a PWA; every method no-ops safely where the
- * platform lacks AudioContext / Audio (SSR, locked-down embeds).
+ * The cheap path: bundled .mp3 cues + inline data: URLs. Playback goes through
+ * the **Web Audio API** — once the AudioContext is resumed inside a user gesture
+ * (`unlock()`), decoded buffers play on demand with NO further autoplay gating.
+ * (An earlier HTMLAudioElement version played fine only with DevTools open, which
+ * relaxes Chrome's autoplay policy — fresh `new Audio().play()` calls fired from
+ * a socket event, outside the brief post-tap activation window, were silently
+ * blocked. Routing through the running context fixes that.) Works identically
+ * native (Capacitor serves the web layer) and as a PWA; falls back to an
+ * HTMLAudioElement where AudioContext is unavailable, and no-ops where neither is.
  *
- * iOS gotcha: programmatic playback is blocked until audio has been started
- * once from inside a user gesture. `unlock()` performs that priming and must be
- * called from a tap handler (the consent button, or a one-shot pointerdown on
- * reconnect) — see Consent.tsx / main.tsx.
+ * iOS gotcha: the context must be resumed from inside a user gesture. `unlock()`
+ * does that and MUST be called from a tap handler (the consent button, or a
+ * one-shot pointerdown on reconnect) — see Consent.tsx / main.tsx.
  *
  * Loops (e.g. the storm rain bed) are owned by their renderer (AmbianceLayer),
  * which holds the returned handle and calls stop() on unmount; stopAll() is the
@@ -64,114 +67,187 @@ const AudioContextCtor: AudioCtor | undefined =
 
 const hasAudioElement = typeof Audio !== "undefined";
 
+const NOOP_HANDLE: AudioHandle = { stop: () => {} };
+
 // ---------------------------------------------------------------------------
 // Implementation
 // ---------------------------------------------------------------------------
 
-const NOOP_HANDLE: AudioHandle = { stop: () => {} };
-
 class WebAudio implements AudioCapability {
   private ctx: AudioContext | null = null;
-  /** Every live element we've created, so stopAll() can sweep them. */
-  private readonly active = new Set<HTMLAudioElement>();
+  /** Decoded cue buffers, kept for the app's life (a tiny bounded set). */
+  private readonly cueBuffers = new Map<string, Promise<AudioBuffer>>();
+  /** Live source nodes, so stopAll() can sweep them. */
+  private readonly active = new Set<AudioBufferSourceNode>();
+  /** Live HTMLAudioElements when running on the (no-WebAudio) fallback path. */
+  private readonly activeEls = new Set<HTMLAudioElement>();
+
+  private ensureCtx(): AudioContext | null {
+    if (this.ctx === null && AudioContextCtor !== undefined) {
+      try {
+        this.ctx = new AudioContextCtor();
+      } catch {
+        this.ctx = null;
+      }
+    }
+    return this.ctx;
+  }
 
   unlock(): void {
-    // (1) AudioContext: create lazily, resume, and play one silent sample so
-    // iOS marks the context as user-activated.
-    try {
-      if (this.ctx === null && AudioContextCtor !== undefined) {
-        this.ctx = new AudioContextCtor();
-      }
-      if (this.ctx !== null) {
-        void this.ctx.resume();
-        const buffer = this.ctx.createBuffer(1, 1, 22050);
-        const src = this.ctx.createBufferSource();
+    const ctx = this.ensureCtx();
+    if (ctx !== null) {
+      try {
+        // Resume inside the gesture — this is what lets later buffers play.
+        void ctx.resume();
+        // A 1-sample silent blip so iOS marks the context user-activated.
+        const buffer = ctx.createBuffer(1, 1, 22050);
+        const src = ctx.createBufferSource();
         src.buffer = buffer;
-        src.connect(this.ctx.destination);
+        src.connect(ctx.destination);
         src.start(0);
+      } catch {
+        /* best-effort priming */
       }
-    } catch {
-      /* best-effort priming */
+      return;
     }
-
-    // (2) HTMLAudioElement: construct, play (muted), then immediately pause, so
-    // the element-playback path is also unlocked for later cue playback on iOS.
+    // Fallback path (no AudioContext): prime an HTMLAudioElement.
     try {
       if (hasAudioElement) {
         const el = new Audio();
         el.muted = true;
         const p = el.play();
-        if (p !== undefined) {
-          void p.then(() => el.pause()).catch(() => {});
-        } else {
-          el.pause();
-        }
+        if (p !== undefined) void p.then(() => el.pause()).catch(() => {});
       }
     } catch {
       /* best-effort priming */
     }
   }
 
-  play(source: PlaySource, opts: PlayOptions = {}): AudioHandle {
-    if (!hasAudioElement) return NOOP_HANDLE;
+  /** Fetch + decode an audio URL into a buffer. Cues are cached; data: URLs aren't. */
+  private decode(url: string, cache: boolean): Promise<AudioBuffer> {
+    const ctx = this.ctx;
+    if (ctx === null) return Promise.reject(new Error("no AudioContext"));
+    if (cache) {
+      const hit = this.cueBuffers.get(url);
+      if (hit !== undefined) return hit;
+    }
+    const pending = fetch(url)
+      .then((r) => r.arrayBuffer())
+      .then((ab) => ctx.decodeAudioData(ab));
+    if (cache) this.cueBuffers.set(url, pending);
+    return pending;
+  }
 
+  play(source: PlaySource, opts: PlayOptions = {}): AudioHandle {
+    const ctx = this.ensureCtx();
+    const url = source.via === "cue" ? cueUrl(source.cue) : source.data;
+
+    // Fallback: no Web Audio → HTMLAudioElement (autoplay-policy caveats apply).
+    if (ctx === null) return this.playElement(url, opts);
+
+    // The context was resumed on the unlock gesture; re-resume if the browser
+    // suspended it while idle (harmless when already running).
+    if (ctx.state === "suspended") void ctx.resume();
+
+    // play() is synchronous but decode is async — track stop intent across it.
+    const handleState: { stopped: boolean; node: AudioBufferSourceNode | null } = {
+      stopped: false,
+      node: null,
+    };
+
+    this.decode(url, source.via === "cue")
+      .then((buf) => {
+        if (handleState.stopped) return;
+        const node = ctx.createBufferSource();
+        node.buffer = buf;
+        node.loop = opts.loop ?? false;
+        const gain = ctx.createGain();
+        gain.gain.value = opts.gain ?? 1;
+        node.connect(gain).connect(ctx.destination);
+        node.onended = () => {
+          this.active.delete(node);
+          try {
+            node.disconnect();
+            gain.disconnect();
+          } catch {
+            /* already torn down */
+          }
+        };
+        this.active.add(node);
+        handleState.node = node;
+        node.start(0);
+      })
+      .catch(() => {
+        /* fetch / decode failed — stay silent rather than throw */
+      });
+
+    return {
+      stop: () => {
+        handleState.stopped = true;
+        const node = handleState.node;
+        if (node !== null) {
+          this.active.delete(node);
+          try {
+            node.onended = null;
+            node.stop();
+            node.disconnect();
+          } catch {
+            /* already stopped */
+          }
+        }
+      },
+    };
+  }
+
+  /** HTMLAudioElement fallback (only when AudioContext is unavailable). */
+  private playElement(url: string, opts: PlayOptions): AudioHandle {
+    if (!hasAudioElement) return NOOP_HANDLE;
     let el: HTMLAudioElement;
     try {
-      const url = source.via === "cue" ? cueUrl(source.cue) : source.data;
       el = new Audio(url);
       el.loop = opts.loop ?? false;
       el.volume = opts.gain ?? 1;
     } catch {
       return NOOP_HANDLE;
     }
-
-    this.active.add(el);
-
-    // Non-looping sounds untrack themselves when they finish.
-    const onEnded = () => {
-      this.active.delete(el);
-      el.removeEventListener("ended", onEnded);
-    };
-    el.addEventListener("ended", onEnded);
-
-    const playPromise = el.play();
-    if (playPromise !== undefined) {
-      void playPromise.catch(() => {
-        // Autoplay blocked / decode error — drop it so it isn't a leaked entry.
-        this.active.delete(el);
-        el.removeEventListener("ended", onEnded);
-      });
-    }
-
-    const stop = () => {
-      el.removeEventListener("ended", onEnded);
-      this.active.delete(el);
+    this.activeEls.add(el);
+    const cleanup = () => {
+      this.activeEls.delete(el);
       try {
         el.pause();
-        el.currentTime = 0;
-        // Drop the source so the browser releases the buffer promptly.
         el.removeAttribute("src");
         el.load();
       } catch {
-        /* element already torn down */
+        /* ignore */
       }
     };
-
-    return { stop };
+    el.addEventListener("ended", cleanup, { once: true });
+    const p = el.play();
+    if (p !== undefined) void p.catch(cleanup);
+    return { stop: cleanup };
   }
 
   stopAll(): void {
-    for (const el of this.active) {
+    for (const node of this.active) {
+      try {
+        node.onended = null;
+        node.stop();
+        node.disconnect();
+      } catch {
+        /* ignore */
+      }
+    }
+    this.active.clear();
+    for (const el of this.activeEls) {
       try {
         el.pause();
-        el.currentTime = 0;
         el.removeAttribute("src");
         el.load();
       } catch {
         /* ignore */
       }
     }
-    this.active.clear();
+    this.activeEls.clear();
   }
 }
 
