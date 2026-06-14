@@ -178,11 +178,12 @@ export function App() {
         <StatusDot connected={connected} />
       </header>
 
-      {/* Main — widen to a console when a circle is active (room for the Stage). */}
+      {/* Main — a wide two-column console when a circle is active (controls +
+          live Stage side by side); narrow for the landing/restore screens. */}
       <main
         style={{
           padding: `${space(8)} ${space(5)}`,
-          maxWidth: state.phase === "active" ? "1040px" : "520px",
+          maxWidth: state.phase === "active" ? "1360px" : "520px",
           margin: "0 auto",
           width: "100%",
           boxSizing: "border-box",
@@ -332,10 +333,10 @@ interface CirclePanelProps {
   onLeave: () => void;
 }
 
-type Tab = "stage" | "effects" | "messages";
+type Tab = "effects" | "messages";
 
 function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
-  const [tab, setTab] = useState<Tab>("stage");
+  const [tab, setTab] = useState<Tab>("effects");
   const connected = players.filter((p) => p.connected).length;
 
   return (
@@ -360,30 +361,35 @@ function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
         </button>
       </div>
 
-      {/* Tab bar */}
-      <div style={{ display: "flex", gap: space(1), borderBottom: `1px solid ${palette.ash}` }}>
-        {(["stage", "effects", "messages"] as const).map((id) => (
-          <button key={id} onClick={() => setTab(id)} style={tabButtonStyle(tab === id)}>
-            {tabLabel(id)}
-          </button>
-        ))}
+      {/* Two columns: control tabs on the left, the live Stage on the right —
+          so effects show up in the player previews as the GM fires them. Wraps
+          to a single column on a narrow window (Stage drops below the controls). */}
+      <div style={{ display: "flex", gap: space(6), alignItems: "flex-start", flexWrap: "wrap" }}>
+        {/* LEFT — control tabs */}
+        <div style={{ flex: "1 1 360px", minWidth: 320, maxWidth: 560, display: "flex", flexDirection: "column", gap: space(5) }}>
+          <div style={{ display: "flex", gap: space(1), borderBottom: `1px solid ${palette.ash}` }}>
+            {(["effects", "messages"] as const).map((id) => (
+              <button key={id} onClick={() => setTab(id)} style={tabButtonStyle(tab === id)}>
+                {tabLabel(id)}
+              </button>
+            ))}
+          </div>
+
+          {tab === "effects" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: space(6) }}>
+              <Soundboard players={players} />
+              <ActiveEffects circle={circle} players={players} />
+            </div>
+          )}
+
+          {tab === "messages" && <MessageComposer players={players} />}
+        </div>
+
+        {/* RIGHT — the live Stage, sticky so it stays in view while scrolling. */}
+        <div style={{ flex: "1 1 440px", minWidth: 340, position: "sticky", top: space(4) }}>
+          <Stage circle={circle} players={players} />
+        </div>
       </div>
-
-      {/* Tab content */}
-      {tab === "stage" && <Stage circle={circle} players={players} />}
-
-      {tab === "effects" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: space(6), maxWidth: 640 }}>
-          <Soundboard players={players} />
-          <ActiveEffects circle={circle} players={players} />
-        </div>
-      )}
-
-      {tab === "messages" && (
-        <div style={{ maxWidth: 640 }}>
-          <MessageComposer players={players} />
-        </div>
-      )}
     </div>
   );
 }
@@ -426,7 +432,6 @@ function CodeChip({ code }: { code: string }) {
 
 function tabLabel(id: Tab): string {
   switch (id) {
-    case "stage": return "Stage";
     case "effects": return "Effects";
     case "messages": return "Messages";
   }

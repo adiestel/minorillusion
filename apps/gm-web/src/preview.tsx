@@ -80,7 +80,12 @@ function makeTransients(now: number): TransientMap {
     "p-aria": { flash: { id: `f-${now}`, at: now } },
     "p-bram": { pip: { id: `t-${now}`, icon: "♪", label: "Thunder", at: now } },
     "p-cole": {
-      msg: { text: "The embers flare — a shadow crosses the wall.", at: now },
+      message: {
+        id: `m-${now}`,
+        text: "The embers flare — a shadow crosses the wall.",
+        mode: "acknowledge",
+        at: now,
+      },
     },
     "p-dax": { pip: { id: `h-${now}`, icon: "♥", label: "Heartbeat", at: now } },
   };

@@ -675,13 +675,23 @@ function App() {
     };
     const onResize = () => {
       if (timer !== undefined) window.clearTimeout(timer);
-      timer = window.setTimeout(report, 300);
+      timer = window.setTimeout(report, 250);
     };
     report(); // initial report on (re)join
+    // A second pass once layout settles (mobile URL bar / late reflow) so the
+    // GM gets the final size, not a transient one.
+    const settle = window.setTimeout(report, 600);
     window.addEventListener("resize", onResize);
+    window.addEventListener("orientationchange", report);
+    // Re-report after a socket reconnect: the server binding is fresh and has no
+    // viewport until we send one again, otherwise the tile falls back to default.
+    socket.on("connect", report);
     return () => {
       if (timer !== undefined) window.clearTimeout(timer);
+      window.clearTimeout(settle);
       window.removeEventListener("resize", onResize);
+      window.removeEventListener("orientationchange", report);
+      socket.off("connect", report);
     };
   }, [appState.screen]);
 

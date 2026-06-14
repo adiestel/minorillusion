@@ -25,6 +25,7 @@ import type {
   AmbianceScene,
   Circle,
   EffectMirror,
+  MessageMode,
   Player,
   Target,
   Viewport,
@@ -73,7 +74,6 @@ function tileBox(vp: Viewport | undefined): { w: number; h: number } {
 // Transient overlay lifetimes (ms) — how long a mirrored pip lingers on a tile.
 const FLASH_MS = 950;
 const PIP_MS = 1600;
-const MSG_MS = 3200;
 
 // ---------------------------------------------------------------------------
 // Per-tile transient state (driven by effect:mirror)
@@ -86,10 +86,25 @@ interface Pip {
   at: number;
 }
 
+/**
+ * A mirrored parchment message on a tile — persists like the player's own does
+ * (so the Stage is a true mirror, not a blink): acknowledge stays until the
+ * player taps (effect:acked) or a newer message supersedes it; auto_dismiss and
+ * silent stay for their linger window.
+ */
+interface TileMessage {
+  id: string;
+  text: string;
+  mode: MessageMode;
+  at: number;
+  /** ms timestamp it auto-clears; undefined = persists until acked/superseded. */
+  expiresAt?: number;
+}
+
 export interface Transient {
   flash?: { id: string; at: number };
   pip?: Pip;
-  msg?: { text: string; at: number };
+  message?: TileMessage;
 }
 
 // ---------------------------------------------------------------------------
@@ -233,6 +248,23 @@ export function Stage({ circle, players }: StageProps) {
     };
   }, []);
 
+  // When a player acks a message, clear it from that tile (mirrors the player
+  // tapping the parchment away — acknowledge messages have no auto-expiry).
+  useEffect(() => {
+    function onAcked({ effectId, playerId }: { effectId: string; playerId: string }) {
+      setTransients((prev) => {
+        const t = prev[playerId];
+        if (!t?.message || t.message.id !== effectId) return prev;
+        const { message: _cleared, ...rest } = t;
+        return { ...prev, [playerId]: rest };
+      });
+    }
+    socket.on("effect:acked", onAcked);
+    return () => {
+      socket.off("effect:acked", onAcked);
+    };
+  }, []);
+
   // Prune expired transients on a light interval, but only while some exist.
   const hasTransient = Object.keys(transients).length > 0;
   useEffect(() => {
@@ -263,9 +295,12 @@ function pruneTransients(prev: TransientMap, now: number): TransientMap {
     else if (t.flash) changed = true;
     if (t.pip && now - t.pip.at < PIP_MS) nt.pip = t.pip;
     else if (t.pip) changed = true;
-    if (t.msg && now - t.msg.at < MSG_MS) nt.msg = t.msg;
-    else if (t.msg) changed = true;
-    if (nt.flash || nt.pip || nt.msg) next[pid] = nt;
+    // A message stays until its expiry; acknowledge (no expiry) persists until
+    // the player acks it (cleared by the effect:acked handler) or it's replaced.
+    if (t.message && (t.message.expiresAt === undefined || now < t.message.expiresAt)) {
+      nt.message = t.message;
+    } else if (t.message) changed = true;
+    if (nt.flash || nt.pip || nt.message) next[pid] = nt;
     else if (Object.keys(t).length > 0) changed = true;
   }
   return changed ? next : prev;
@@ -295,12 +330,16 @@ export function StageCanvas({
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const { w, h } = useElementSize(canvasRef);
 
-  // --- Per-player tile box (from each player's reported viewport) ---
+  // Only connected clients appear on the table (a disconnected player keeps its
+  // saved position but isn't shown until it returns).
+  const shown = useMemo(() => players.filter((p) => p.connected), [players]);
+
+  // --- Per-player tile box (from each connected player's reported viewport) ---
   const dimsByPlayer = useMemo(() => {
     const m = new Map<string, { w: number; h: number }>();
-    for (const p of players) m.set(p.id, tileBox(p.viewport));
+    for (const p of shown) m.set(p.id, tileBox(p.viewport));
     return m;
-  }, [players]);
+  }, [shown]);
   const dimsRef = useRef(dimsByPlayer);
   dimsRef.current = dimsByPlayer;
   const boxOf = (id: string) => dimsRef.current.get(id) ?? tileBox(undefined);
@@ -315,19 +354,19 @@ export function StageCanvas({
     setLayout(loadLayout(circleId));
   }, [circleId]);
 
-  // Ensure every player has a position; auto-place newcomers around the table.
+  // Ensure every shown player has a position; auto-place newcomers around the table.
   useEffect(() => {
     const current = layoutRef.current;
-    const missing = players.filter((p) => current[p.id] === undefined);
+    const missing = shown.filter((p) => current[p.id] === undefined);
     if (missing.length === 0) return;
-    const n = players.length;
+    const n = shown.length;
     const next: Layout = { ...current };
-    players.forEach((p, i) => {
+    shown.forEach((p, i) => {
       if (next[p.id] === undefined) next[p.id] = autoPlace(i, n);
     });
     setLayout(next);
     saveLayout(circleId, next);
-  }, [players, circleId]);
+  }, [shown, circleId]);
 
   // --- Dragging ---
   const dragState = useRef<{ id: string; dx: number; dy: number } | null>(null);
@@ -378,17 +417,12 @@ export function StageCanvas({
   }, [circleId]);
 
   // --- Render ---
-  const connectedCount = useMemo(
-    () => players.filter((p) => p.connected).length,
-    [players],
-  );
-
   return (
     <section style={{ display: "flex", flexDirection: "column", gap: space(3) }}>
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
         <h2 style={headingStyle}>The table</h2>
         <span style={{ fontSize: "0.78rem", color: "var(--text-dim)" }}>
-          drag to arrange · {connectedCount} live
+          drag to arrange · {shown.length} live
         </span>
       </div>
 
@@ -402,10 +436,10 @@ export function StageCanvas({
         {/* The hearth — a faint ring + ember at the centre (the virtual table). */}
         <div style={tableRingStyle} aria-hidden="true" />
 
-        {players.length === 0 ? (
+        {shown.length === 0 ? (
           <p style={emptyHintStyle}>Waiting for players to join…</p>
         ) : (
-          players.map((p) => {
+          shown.map((p) => {
             const frac = layout[p.id] ?? { fx: 0.5, fy: 0.5 };
             const box = dimsByPlayer.get(p.id) ?? tileBox(undefined);
             const screen = screenDims(p.viewport);
@@ -454,8 +488,19 @@ function mirrorToPatch(
         effect.source.via === "cue" ? cueLabel(effect.source.cue) : "Speak";
       return { pip: { id: effect.id, icon: "♪", label, at: now } };
     }
-    case "message":
-      return { msg: { text: effect.body, at: now } };
+    case "message": {
+      // Mirror the player's parchment lifetime (see ParchmentMessage):
+      // acknowledge persists until tapped; auto_dismiss/silent linger then fold.
+      let expiresAt: number | undefined;
+      if (effect.mode === "auto_dismiss") {
+        expiresAt = now + (effect.autoDismissMs ?? 6000) + 1500;
+      } else if (effect.mode === "silent") {
+        expiresAt = now + 8000 + 1500;
+      }
+      return {
+        message: { id: effect.id, text: effect.body, mode: effect.mode, at: now, expiresAt },
+      };
+    }
     case "ambiance":
       // Backgrounds come from effects:active (authoritative) — nothing to pip.
       return null;
@@ -502,7 +547,7 @@ function PhoneTile({
   const live = player.connected;
   const flash = live ? transient?.flash : undefined;
   const pip = live ? transient?.pip : undefined;
-  const msg = live ? transient?.msg : undefined;
+  const message = live ? transient?.message : undefined;
   // Ember scales with the screen so it reads right on tiny or wide tiles.
   const emberSize = Math.round(Math.min(screenW, screenH) * 0.32);
 
@@ -556,10 +601,19 @@ function PhoneTile({
           }}
         />
 
-        {/* Message strip — a small parchment card near the bottom. */}
-        {msg && (
-          <div style={msgStripStyle} className="mi-stage-fade">
-            {truncate(msg.text, 38)}
+        {/* Message — a centred parchment card that PERSISTS like the player's
+            (acknowledge until tapped; auto_dismiss/silent until they fold), so
+            the tile mirrors what's actually on the player's screen. */}
+        {message && (
+          <div
+            key={message.id}
+            className="mi-stage-msg"
+            style={{
+              ...msgCardStyle,
+              opacity: message.mode === "silent" ? 0.9 : 1,
+            }}
+          >
+            {truncate(message.text, 88)}
           </div>
         )}
 
@@ -673,6 +727,13 @@ function injectStageStyles(): void {
     }
     .mi-stage-fade { animation: mi-stage-fade ${PIP_MS}ms ease-out forwards; }
 
+    /* Messages persist (no fade-out) — just a gentle rise-in, like the parchment. */
+    @keyframes mi-stage-msg-in {
+      from { opacity: 0; transform: translate(-50%, calc(-50% + 6px)); }
+      to   { opacity: 1; transform: translate(-50%, -50%); }
+    }
+    .mi-stage-msg { animation: mi-stage-msg-in 340ms ease-out both; }
+
     .mi-stage-rain {
       background-image: repeating-linear-gradient(
         100deg,
@@ -764,21 +825,25 @@ const pipStyle: React.CSSProperties = {
   pointerEvents: "none",
 };
 
-const msgStripStyle: React.CSSProperties = {
+// A centred parchment card (the animation positions it via translate(-50%,-50%)).
+const msgCardStyle: React.CSSProperties = {
   position: "absolute",
-  left: 6,
-  right: 6,
-  bottom: 8,
-  padding: "5px 7px",
+  left: "50%",
+  top: "50%",
+  width: "80%",
+  maxHeight: "82%",
+  overflow: "hidden",
+  padding: "7px 8px",
   borderRadius: radius.sm,
   background: palette.parchment,
-  color: palette.ink,
-  fontSize: "0.6rem",
-  lineHeight: 1.3,
-  fontWeight: 600,
+  color: "#241608",
+  fontFamily: "Georgia, 'Times New Roman', serif",
+  fontSize: "0.62rem",
+  lineHeight: 1.34,
   textAlign: "center",
+  textWrap: "balance" as React.CSSProperties["textWrap"],
   pointerEvents: "none",
-  boxShadow: "0 2px 6px rgba(0,0,0,0.4)",
+  boxShadow: "0 4px 14px rgba(0,0,0,0.6)",
 };
 
 function truncate(s: string, n: number): string {
