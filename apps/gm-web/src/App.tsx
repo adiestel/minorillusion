@@ -25,6 +25,7 @@ import { gmTheme, palette, radius, space, themeVars } from "@minorillusion/desig
 import { socket } from "./socket";
 import { MessageComposer } from "./MessageComposer";
 import { Soundboard } from "./Soundboard";
+import { ActiveEffects } from "./ActiveEffects";
 
 // ---------------------------------------------------------------------------
 // Session-restore helpers
@@ -394,6 +395,11 @@ function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
 
       {/* M2 — soundboard: one-tap atmosphere triggers */}
       <Soundboard players={players} />
+
+      <Divider />
+
+      {/* M2 — live registry of running effects (stop / countdown) */}
+      <ActiveEffects circle={circle} players={players} />
 
       <Divider />
 

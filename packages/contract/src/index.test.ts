@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  activeEffectSchema,
   ambianceScene,
+  AUDIO_CUE_DURATION_MS,
   audioCue,
   circleSchema,
   deliveredEffectSchema,
@@ -203,5 +205,51 @@ describe("delivered effects (what a player receives)", () => {
     for (const d of delivered) {
       expect(deliveredEffectSchema.safeParse(d).success).toBe(true);
     }
+  });
+});
+
+describe("active-effects control rework", () => {
+  const now = new Date().toISOString();
+
+  it("accepts a flash spec and delivered flash", () => {
+    expect(effectSpecSchema.safeParse({ kind: "flash", intensity: 0.9 }).success).toBe(true);
+    expect(
+      deliveredEffectSchema.safeParse({
+        id: crypto.randomUUID(),
+        kind: "flash",
+        intensity: 0.9,
+        durationMs: 320,
+        createdAt: now,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("validates sustained + transient active-effect records", () => {
+    const sustained = activeEffectSchema.safeParse({
+      id: crypto.randomUUID(),
+      kind: "ambiance",
+      label: "Storm",
+      target: { kind: "broadcast" },
+      sustained: true,
+      startedAt: now,
+    });
+    expect(sustained.success).toBe(true);
+
+    const transient = activeEffectSchema.safeParse({
+      id: crypto.randomUUID(),
+      kind: "audio",
+      label: "Thunderclap",
+      target: { kind: "players", playerIds: [crypto.randomUUID()] },
+      sustained: false,
+      startedAt: now,
+      durationMs: 5000,
+    });
+    expect(transient.success).toBe(true);
+  });
+
+  it("exposes a duration for each one-shot cue (rain loops → 0)", () => {
+    expect(AUDIO_CUE_DURATION_MS.thunder).toBeGreaterThan(0);
+    expect(AUDIO_CUE_DURATION_MS.chime).toBeGreaterThan(0);
+    expect(AUDIO_CUE_DURATION_MS.rain).toBe(0);
   });
 });

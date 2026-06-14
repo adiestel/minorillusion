@@ -27,11 +27,13 @@ import type {
   DeliveredEffect,
   MessageEffect,
   AmbianceScene,
+  FlashEffect,
 } from "@minorillusion/contract";
 import { playerTheme, themeVars, palette, space } from "@minorillusion/design-system";
 import { ParchmentMessage } from "./ParchmentMessage";
 import { AmbianceLayer } from "./AmbianceLayer";
 import { Heartbeat } from "./Heartbeat";
+import { Flash } from "./Flash";
 import { Consent } from "./Consent";
 
 import { socket } from "./socket";
@@ -382,6 +384,13 @@ interface HeartbeatState {
   beats: number;
 }
 
+/** Transient flash overlay (keyed by effect id; latest wins). */
+interface FlashState {
+  id: string;
+  intensity?: number;
+  durationMs?: number;
+}
+
 function App() {
   // Initialise to "reconnecting" if a stored session exists, "join" otherwise.
   const [appState, setAppState] = useState<AppState>(() =>
@@ -408,9 +417,21 @@ function App() {
   const activeMessageRef = useRef<MessageEffect | null>(null);
   activeMessageRef.current = activeMessage;
 
-  // --- persistent ambiance + transient heartbeat ---
+  // --- persistent ambiance + transient heartbeat/flash ---
   const [ambiance, setAmbiance] = useState<AmbianceState>({ scene: "clear" });
   const [heartbeat, setHeartbeat] = useState<HeartbeatState | null>(null);
+  const [flash, setFlash] = useState<FlashState | null>(null);
+
+  // --- sustained-effect registry (M2 control rework) ---
+  // effectId → cleanup. A sustained effect (a standalone audio loop, or an
+  // ambiance scene) registers a cleanup here when it starts; effect:end looks the
+  // id up, runs the cleanup, and forgets it. Loops store handle.stop; an ambiance
+  // stores "set the scene back to clear" (the AmbianceLayer then unmounts, which
+  // already stops its rain bed). A ref (not state) — purely imperative bookkeeping.
+  const sustainedCleanups = useRef<Map<string, () => void>>(new Map());
+  // The effect id of the ambiance scene currently showing (null when clear), so
+  // effect:end can tell whether an id refers to the live ambiance.
+  const ambianceEffectId = useRef<string | null>(null);
 
   // Outstanding startDelayMs timers, cleared on unmount.
   const delayTimers = useRef<Set<number>>(new Set());
@@ -433,6 +454,44 @@ function App() {
     }
   }, []);
 
+  /** Register a cleanup for a sustained effect, keyed by its delivered id. */
+  const registerSustained = useCallback((id: string, cleanup: () => void) => {
+    sustainedCleanups.current.set(id, cleanup);
+  }, []);
+
+  /** Clear the persistent ambiance back to "clear" and forget its tracking. */
+  const clearAmbiance = useCallback(() => {
+    setAmbiance({ scene: "clear" });
+    const prevId = ambianceEffectId.current;
+    if (prevId !== null) sustainedCleanups.current.delete(prevId);
+    ambianceEffectId.current = null;
+  }, []);
+
+  /**
+   * Set the persistent ambiance to a (non-clear) scene and track it as a
+   * sustained effect: supersede any prior ambiance, remember this id, and
+   * register a cleanup that sweeps back to clear (run by effect:end). A "clear"
+   * scene just tears the current ambiance down via clearAmbiance.
+   */
+  const setActiveAmbiance = useCallback(
+    (id: string, scene: AmbianceScene, intensity?: number) => {
+      if (scene === "clear") {
+        clearAmbiance();
+        return;
+      }
+      // A new scene supersedes the previous one (latest wins): drop the old id's
+      // stale cleanup entry before registering this one.
+      const prevId = ambianceEffectId.current;
+      if (prevId !== null && prevId !== id) {
+        sustainedCleanups.current.delete(prevId);
+      }
+      setAmbiance({ scene, intensity });
+      ambianceEffectId.current = id;
+      registerSustained(id, clearAmbiance);
+    },
+    [clearAmbiance, registerSustained],
+  );
+
   // Receive an incoming effect and route by kind, each honouring startDelayMs.
   const handleEffectDeliver = useCallback(
     (effect: DeliveredEffect) => {
@@ -442,10 +501,18 @@ function App() {
           break;
 
         case "audio":
-          // One-shots play out and untrack themselves; loops are owned by the
-          // ambiance layer, so we keep no handle here.
           scheduleEffect(effect.startDelayMs, () => {
-            audio.play(effect.source, { gain: effect.gain, loop: effect.loop });
+            const handle = audio.play(effect.source, {
+              gain: effect.gain,
+              loop: effect.loop,
+            });
+            // A standalone loop is a sustained effect: register its stop under the
+            // effect id so effect:end can halt it. (The storm's rain bed is owned
+            // by the AmbianceLayer instead and isn't tracked here.) One-shots play
+            // out and untrack themselves inside the audio capability.
+            if (effect.loop === true) {
+              registerSustained(effect.id, handle.stop);
+            }
           });
           break;
 
@@ -456,9 +523,12 @@ function App() {
           break;
 
         case "ambiance":
-          // Persistent: set the scene; the AmbianceLayer swaps in place.
+          // Persistent: set the scene; the AmbianceLayer swaps in place. A
+          // non-clear scene is a sustained effect — remember its id and register
+          // a cleanup that sweeps back to clear (so effect:end / "Calm" can end
+          // it; the AmbianceLayer then unmounts and stops its own rain bed).
           scheduleEffect(effect.startDelayMs, () => {
-            setAmbiance({ scene: effect.scene, intensity: effect.intensity });
+            setActiveAmbiance(effect.id, effect.scene, effect.intensity);
           });
           break;
 
@@ -473,6 +543,18 @@ function App() {
           });
           break;
 
+        case "flash":
+          // Transient: a brief full-screen flash (latest wins, keyed by id). The
+          // server paces storm strikes seconds apart (photosensitivity, D10).
+          scheduleEffect(effect.startDelayMs, () => {
+            setFlash({
+              id: effect.id,
+              intensity: effect.intensity,
+              durationMs: effect.durationMs,
+            });
+          });
+          break;
+
         default: {
           // Exhaustiveness guard — a new kind should fail to typecheck here.
           const _never: never = effect;
@@ -480,7 +562,7 @@ function App() {
         }
       }
     },
-    [scheduleEffect, enqueueMessage],
+    [scheduleEffect, enqueueMessage, registerSustained, setActiveAmbiance],
   );
 
   // Called by ParchmentMessage when the current message fully exits.
@@ -502,6 +584,25 @@ function App() {
     setHeartbeat(null);
   }, []);
 
+  // Self-removal when a flash finishes (the brief strike has faded out).
+  const handleFlashDone = useCallback((id: string) => {
+    // Latest-wins guard: only clear if this is still the showing flash, so a
+    // newer strike that arrived mid-fade isn't yanked by the old one's onDone.
+    setFlash((cur) => (cur !== null && cur.id === id ? null : cur));
+  }, []);
+
+  // Stop/clear a specific active effect on the server's say-so (M2 control
+  // rework — drives the GM "Stop" / "Calm" buttons). Look the id up in the
+  // sustained-cleanup registry; if found, run the cleanup and forget it. An
+  // ambiance cleanup sweeps the scene back to clear (the AmbianceLayer then
+  // unmounts and stops its own rain bed); a loop cleanup is its handle.stop.
+  const handleEffectEnd = useCallback(({ effectId }: { effectId: string }) => {
+    const cleanup = sustainedCleanups.current.get(effectId);
+    if (cleanup === undefined) return;
+    sustainedCleanups.current.delete(effectId);
+    cleanup();
+  }, []);
+
   // Listen for effect:deliver (always, not just when joined — the server won't
   // deliver to a socket that hasn't joined a circle, so this is safe).
   useEffect(() => {
@@ -511,12 +612,25 @@ function App() {
     };
   }, [handleEffectDeliver]);
 
-  // Clear any pending startDelayMs timers on unmount.
+  // Listen for effect:end (stop a specific sustained loop/ambiance by id).
+  useEffect(() => {
+    socket.on("effect:end", handleEffectEnd);
+    return () => {
+      socket.off("effect:end", handleEffectEnd);
+    };
+  }, [handleEffectEnd]);
+
+  // Clear any pending startDelayMs timers AND run any sustained cleanups
+  // (standalone audio loops) on unmount, so nothing keeps playing into a
+  // torn-down tree. (Ambiance cleanups are cheap setState no-ops at unmount.)
   useEffect(() => {
     const timers = delayTimers.current;
+    const cleanups = sustainedCleanups.current;
     return () => {
       for (const id of timers) window.clearTimeout(id);
       timers.clear();
+      for (const cleanup of cleanups.values()) cleanup();
+      cleanups.clear();
     };
   }, []);
 
@@ -676,6 +790,18 @@ function App() {
           bpm={heartbeat.bpm}
           beats={heartbeat.beats}
           onDone={handleHeartbeatDone}
+        />
+      )}
+
+      {/* Transient flash (storm lightning etc.) — above ambiance/ember/heartbeat,
+          below the parchment scrim. Keyed by id so a new strike replaces an
+          in-flight one cleanly (latest-wins; one brief flash each, D10). */}
+      {flash !== null && (
+        <Flash
+          key={flash.id}
+          intensity={flash.intensity}
+          durationMs={flash.durationMs}
+          onDone={() => handleFlashDone(flash.id)}
         />
       )}
 

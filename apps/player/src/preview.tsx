@@ -7,7 +7,9 @@
  *
  *   /preview.html?view=storm|ember|heartbeat|consent  [&flash=1] [&freeze=1]
  *
- * flash=1  freezes a storm lightning strike on-screen (deterministic still).
+ * flash=1  overlays a storm lightning Flash, frozen at peak (deterministic still).
+ *          Lightning is now its own <Flash> component (server-driven in prod),
+ *          not part of the storm ambiance, so the preview composes them here.
  * freeze=1 freezes the heartbeat pulse at peak (deterministic still).
  */
 import { StrictMode } from "react";
@@ -15,6 +17,7 @@ import { createRoot } from "react-dom/client";
 import { palette, playerTheme, themeVars } from "@minorillusion/design-system";
 import { AmbianceLayer } from "./AmbianceLayer";
 import { Heartbeat } from "./Heartbeat";
+import { Flash } from "./Flash";
 import { Consent } from "./Consent";
 import { audio } from "./capabilities/index";
 
@@ -47,9 +50,11 @@ if (params.get("freeze") === "1") {
   o.textContent = `.mi-heartbeat { opacity: .85 !important; transform: scale(1) !important; animation: none !important; }`;
   document.head.appendChild(o);
 }
-if (params.get("flash") === "1") {
+const showFlash = params.get("flash") === "1";
+if (showFlash) {
   const o = document.createElement("style");
-  o.textContent = `.mi-storm-flash { opacity: .5 !important; animation: none !important; }`;
+  // Freeze the new <Flash> overlay at a visible peak for a deterministic still.
+  o.textContent = `.mi-flash { opacity: .5 !important; animation: none !important; }`;
   document.head.appendChild(o);
 }
 
@@ -67,6 +72,23 @@ function View() {
   switch (view) {
     case "consent":
       return <Consent onAccept={() => {}} onDecline={() => {}} />;
+    case "flash":
+      // Flash over a STATIC storm-ish backdrop (no infinite rain animation, so
+      // headless --virtual-time-budget settles reliably). Pair with &flash=1.
+      return (
+        <>
+          <div
+            style={{
+              position: "fixed",
+              inset: 0,
+              background:
+                "radial-gradient(ellipse at 50% 38%, rgba(38,50,74,0.55) 0%, rgba(16,22,34,0.7) 55%, rgba(6,8,12,0.92) 100%)",
+            }}
+          />
+          <div className="mi-preview-ember" />
+          <Flash onDone={() => {}} />
+        </>
+      );
     case "ember":
       return (
         <>
@@ -87,6 +109,8 @@ function View() {
         <>
           <AmbianceLayer scene="storm" />
           <div className="mi-preview-ember" />
+          {/* Lightning is now a separate overlay; the flash=1 CSS freezes it. */}
+          {showFlash && <Flash onDone={() => {}} />}
         </>
       );
   }

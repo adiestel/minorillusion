@@ -9,16 +9,18 @@
  * Scenes:
  *   • clear — render nothing (resting near-black + ember show through), and stop
  *             any audio loop on entry (ends a lingering rain bed).
- *   • storm — dark blue-grey vignette wash + JS-timed lightning (brief flashes,
- *             randomized 4–9s apart, sometimes a double-strike) + a rain audio
- *             bed + faint CSS rain streaks. NOT a strobe (photosensitivity, D10).
+ *   • storm — dark blue-grey vignette wash + a rain audio bed + faint CSS rain
+ *             streaks. Lightning is NO LONGER self-generated here: the server
+ *             paces it as `flash` effects (rendered by <Flash> in main.tsx) on
+ *             top of the ambiance, so strikes stay seconds apart (photosensitivity,
+ *             D10) and the GM controls them.
  *   • ember — a warm amber glow wash (embers "stirred"); subtle, not a fire.
  *
  * All DOM/CSS — the cheap path (DECISIONS D7/D13; no WebGL). Sub-components are
  * split out so each can be refined independently later.
  */
 
-import { useEffect, useRef, useState, CSSProperties } from "react";
+import { useEffect, useState, CSSProperties } from "react";
 import type { AmbianceScene } from "@minorillusion/contract";
 import { audio, type AudioHandle } from "./capabilities/index";
 
@@ -45,25 +47,6 @@ function injectStyles(): void {
           rgba(16, 22, 34, 0.7) 55%,
           rgba(6, 8, 12, 0.92) 100%);
     }
-    .mi-storm-flash {
-      position: absolute; inset: 0;
-      background: linear-gradient(
-        to bottom,
-        rgba(228, 238, 255, 0.95),
-        rgba(150, 180, 230, 0.7)
-      );
-      opacity: 0;
-      will-change: opacity;
-    }
-    /* a single brief strike: up fast, down slower; ~360ms total */
-    @keyframes mi-strike {
-      0%   { opacity: 0; }
-      8%   { opacity: 0.9; }
-      22%  { opacity: 0.32; }
-      30%  { opacity: 0.7; }
-      100% { opacity: 0; }
-    }
-    .mi-storm-flash.is-strike { animation: mi-strike 360ms ease-out 1; }
 
     /* faint, slow-drifting rain streaks — cheap repeating-gradient, no JS */
     .mi-storm-rain {
@@ -104,49 +87,14 @@ function injectStyles(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Storm — vignette + JS-timed lightning + rain bed.
+// Storm — vignette + rain streaks + rain bed.
+//
+// Lightning is NOT generated here anymore: the server drives it as `flash`
+// effects (rendered by <Flash> in main.tsx) layered on top, so strikes are paced
+// seconds apart and the GM controls them. This layer is the steady backdrop.
 // ---------------------------------------------------------------------------
 
-/** A bright flash is added by toggling .is-strike on the flash div, JS-timed. */
 function StormLayer({ intensity }: { intensity: number }) {
-  const flashRef = useRef<HTMLDivElement | null>(null);
-
-  // Lightning: randomized, infrequent, brief — never a fast repetitive strobe.
-  useEffect(() => {
-    const timers: number[] = [];
-    let stopped = false;
-
-    const fireStrike = () => {
-      const el = flashRef.current;
-      if (el === null) return;
-      el.classList.remove("is-strike");
-      void el.offsetWidth; // reflow → restart animation
-      el.classList.add("is-strike");
-    };
-
-    const scheduleNext = () => {
-      if (stopped) return;
-      // 4–9s between lightning events (randomized so it never feels mechanical).
-      const delay = 4000 + Math.random() * 5000;
-      const t = window.setTimeout(() => {
-        fireStrike();
-        // ~35% of the time, a quick second strike ~180–320ms later.
-        if (Math.random() < 0.35) {
-          const dbl = window.setTimeout(fireStrike, 180 + Math.random() * 140);
-          timers.push(dbl);
-        }
-        scheduleNext();
-      }, delay);
-      timers.push(t);
-    };
-
-    scheduleNext();
-    return () => {
-      stopped = true;
-      for (const t of timers) window.clearTimeout(t);
-    };
-  }, []);
-
   // Rain audio bed — owned here: starts on mount, stops on unmount.
   useEffect(() => {
     const handle: AudioHandle = audio.play(
@@ -156,8 +104,7 @@ function StormLayer({ intensity }: { intensity: number }) {
     return () => handle.stop();
   }, []);
 
-  // intensity nudges the vignette/rain opacity a little; brightness of strikes
-  // is left fixed (photosensitivity — don't let a high intensity ramp flashes).
+  // intensity nudges the vignette/rain opacity a little.
   const washStyle: CSSProperties = {
     opacity: 0.85 + 0.15 * clamp01(intensity),
   };
@@ -169,7 +116,6 @@ function StormLayer({ intensity }: { intensity: number }) {
     <>
       <div className="mi-storm-wash" style={washStyle} />
       <div className="mi-storm-rain" style={rainStyle} />
-      <div ref={flashRef} className="mi-storm-flash" />
     </>
   );
 }

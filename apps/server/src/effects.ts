@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
-import type {
-  AudioSource,
-  CueStep,
-  DeliveredEffect,
-  EffectSpec,
-  Target,
+import {
+  AUDIO_CUE_DURATION_MS,
+  type AudioCue,
+  type AudioSource,
+  type CueStep,
+  type DeliveredEffect,
+  type EffectSpec,
+  type Target,
 } from "@minorillusion/contract";
 import { bufferToDataUrl, getTtsProvider, type TtsProvider } from "./tts.js";
 
@@ -20,6 +22,8 @@ import { bufferToDataUrl, getTtsProvider, type TtsProvider } from "./tts.js";
 /** Knobs for minting one effect: a choreography offset and the TTS provider. */
 export interface BuildOpts {
   startDelayMs?: number;
+  /** flash only: how long the strike lights the screen (the renderer fades it). */
+  durationMs?: number;
   /** Injected for tests / swap; defaults to the env-selected provider. */
   tts?: TtsProvider;
 }
@@ -116,6 +120,20 @@ export async function buildEffect(
       if (opts?.startDelayMs !== undefined) effect.startDelayMs = opts.startDelayMs;
       return effect;
     }
+
+    case "flash": {
+      // A brief screen flash (a storm strike). intensity rides the spec; the
+      // strike length (durationMs) is a router knob, carried only when supplied.
+      const effect: DeliveredEffect = {
+        id,
+        kind: "flash",
+        createdAt,
+      };
+      if (spec.intensity !== undefined) effect.intensity = spec.intensity;
+      if (opts?.durationMs !== undefined) effect.durationMs = opts.durationMs;
+      if (opts?.startDelayMs !== undefined) effect.startDelayMs = opts.startDelayMs;
+      return effect;
+    }
   }
 }
 
@@ -152,4 +170,94 @@ export function resolveTargets(
   }
   const requested = new Set(target.playerIds);
   return presentPlayerIds.filter((id) => requested.has(id));
+}
+
+/**
+ * How a GM-initiated effect should appear in the circle's active-effects
+ * registry (the GM's live panel). A pure decision — no sockets, no state — so
+ * the socket layer can register/expire effects consistently and tests can
+ * exercise the policy directly.
+ *
+ *  - register   → does this effect show in the panel at all?
+ *  - sustained  → true = runs until the GM stops it; false = transient, closes
+ *                 itself after durationMs.
+ *  - durationMs → transient effects only: how long until it auto-closes.
+ *  - label      → the human caption shown for the row.
+ *
+ * Note `ambiance` `clear` reports `register:false`: the socket layer treats a
+ * clear as a STOP of the target's current ambiance, never a row of its own.
+ */
+export interface EffectClassification {
+  register: boolean;
+  sustained: boolean;
+  durationMs?: number;
+  label: string;
+}
+
+/** Capitalize a bundled cue into its panel label (thunder reads "Thunderclap"). */
+function cueLabel(cue: AudioCue): string {
+  if (cue === "thunder") return "Thunderclap";
+  if (cue === "chime") return "Chime";
+  return cue.charAt(0).toUpperCase() + cue.slice(1);
+}
+
+export function classifyEffect(spec: EffectSpec): EffectClassification {
+  switch (spec.kind) {
+    case "audio": {
+      // A loop runs until stopped; a one-shot closes after its source length.
+      if (spec.loop === true) {
+        const label =
+          spec.label ?? (spec.source.via === "cue" ? cueLabel(spec.source.cue) : "Speak");
+        return { register: true, sustained: true, label };
+      }
+      if (spec.source.via === "cue") {
+        return {
+          register: true,
+          sustained: false,
+          durationMs: AUDIO_CUE_DURATION_MS[spec.source.cue],
+          label: cueLabel(spec.source.cue),
+        };
+      }
+      // tts: rough playout estimate (read speed), capped, so the panel can count down.
+      return {
+        register: true,
+        sustained: false,
+        durationMs: Math.min(20_000, 1500 + spec.source.text.length * 60),
+        label: "Speak",
+      };
+    }
+
+    case "ambiance": {
+      // clear is a stop, not a row (the socket layer ends the running ambiance).
+      if (spec.scene === "clear") {
+        return { register: false, sustained: false, label: "Calm" };
+      }
+      if (spec.scene === "storm") {
+        return { register: true, sustained: true, label: "Storm" };
+      }
+      // ember
+      return { register: true, sustained: true, label: "Stir embers" };
+    }
+
+    case "heartbeat": {
+      // beats / bpm → ms; mirrors buildEffect's 60 bpm / 8 beats defaults.
+      const beats = spec.beats ?? 8;
+      const bpm = spec.bpm ?? 60;
+      return {
+        register: true,
+        sustained: false,
+        durationMs: Math.round((beats / bpm) * 60_000),
+        label: "Heartbeat",
+      };
+    }
+
+    case "message":
+      return { register: false, sustained: false, label: "Message" };
+
+    case "haptic":
+      return { register: false, sustained: false, label: "Haptic" };
+
+    case "flash":
+      return { register: false, sustained: false, label: "Flash" };
+  }
 }

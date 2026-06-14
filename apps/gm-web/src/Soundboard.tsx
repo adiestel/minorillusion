@@ -1,8 +1,12 @@
 /**
- * Soundboard — M2 GM atmosphere panel.
- * One-tap effect triggers (audio cues, ambiance, haptics, heartbeat) plus a
- * choreographed "Storm" cue and a TTS "Speak" row. Fires `effect:send` (and
- * `effect:cue` for Storm) and surfaces a brief transient status from the ack.
+ * Soundboard — M2 GM atmosphere panel (control rework).
+ * One-tap effect triggers, split into two labeled sections:
+ *   • Loops — sustained effects that run until stopped (Rain, Storm, embers).
+ *   • One-shots — transient effects that auto-close (Thunderclap, Chime,
+ *     Buzz, Rumble, Heartbeat) plus a TTS "Speak" row.
+ * Every button fires `effect:send` and surfaces a brief transient status from
+ * the ack. Stopping a sustained effect is no longer done here — it moves to the
+ * ActiveEffects panel, which reads the server's live registry.
  *
  * Sits below the MessageComposer inside the active-circle view. Carries its
  * own small target selector (Everyone vs specific connected players), mirroring
@@ -12,8 +16,6 @@ import { useEffect, useRef, useState } from "react";
 import type {
   EffectSpec,
   Player,
-  SendCueRequest,
-  SendCueResult,
   SendEffectRequest,
   SendEffectResult,
   Target,
@@ -32,22 +34,27 @@ interface EffectButton {
   spec: EffectSpec;
 }
 
-/** Buttons that fire one effect via `effect:send`. */
-const EFFECT_BUTTONS: EffectButton[] = [
-  { id: "thunderclap", label: "Thunderclap", spec: { kind: "audio", source: { via: "cue", cue: "thunder" } } },
-  { id: "chime", label: "Chime", spec: { kind: "audio", source: { via: "cue", cue: "chime" } } },
-  { id: "calm", label: "Calm", spec: { kind: "ambiance", scene: "clear" } },
+/**
+ * Loops — sustained effects that keep running until the GM stops them from the
+ * Active panel. Rain is an audio cue set to loop; Storm and embers are ambiance
+ * scenes (persistent by nature).
+ */
+const LOOP_BUTTONS: EffectButton[] = [
+  { id: "rain", label: "Rain", spec: { kind: "audio", source: { via: "cue", cue: "rain" }, loop: true } },
+  { id: "storm", label: "Storm", spec: { kind: "ambiance", scene: "storm" } },
   { id: "embers", label: "Stir embers", spec: { kind: "ambiance", scene: "ember" } },
-  { id: "heartbeat", label: "Heartbeat", spec: { kind: "heartbeat", bpm: 72, beats: 8 } },
-  { id: "buzz", label: "Buzz", spec: { kind: "haptic", pattern: "buzz" } },
-  { id: "rumble", label: "Rumble", spec: { kind: "haptic", pattern: "rumble" } },
 ];
 
-/** The choreographed Storm cue (fires `effect:cue`). */
-const STORM_STEPS: SendCueRequest["steps"] = [
-  { spec: { kind: "ambiance", scene: "storm" } },
-  { spec: { kind: "audio", source: { via: "cue", cue: "thunder" } }, startDelayMs: 300 },
-  { spec: { kind: "haptic", pattern: "rumble" }, startDelayMs: 300 },
+/**
+ * One-shots — transient effects that play once and auto-close. (The "Speak"
+ * TTS row is rendered separately below the grid.)
+ */
+const ONESHOT_BUTTONS: EffectButton[] = [
+  { id: "thunderclap", label: "Thunderclap", spec: { kind: "audio", source: { via: "cue", cue: "thunder" } } },
+  { id: "chime", label: "Chime", spec: { kind: "audio", source: { via: "cue", cue: "chime" } } },
+  { id: "buzz", label: "Buzz", spec: { kind: "haptic", pattern: "buzz" } },
+  { id: "rumble", label: "Rumble", spec: { kind: "haptic", pattern: "rumble" } },
+  { id: "heartbeat", label: "Heartbeat", spec: { kind: "heartbeat", bpm: 72, beats: 8 } },
 ];
 
 // ---------------------------------------------------------------------------
@@ -128,21 +135,6 @@ export function Soundboard({ players }: SoundboardProps) {
     });
   }
 
-  /** Fire the choreographed Storm cue. */
-  function fireStorm() {
-    if (!targetReady) return;
-    setBusyId("storm");
-    const req: SendCueRequest = { target: buildTarget(), steps: STORM_STEPS };
-    socket.emit("effect:cue", req, (result: SendCueResult) => {
-      setBusyId((cur) => (cur === "storm" ? null : cur));
-      if (result.ok) {
-        showStatus({ kind: "ok", text: `Storm → ${result.deliveredTo} ${plural(result.deliveredTo)}` });
-      } else {
-        showStatus({ kind: "error", text: `Storm: ${result.error}` });
-      }
-    });
-  }
-
   /** Fire TTS via the audio effect (server resolves it through ElevenLabs). */
   function fireSpeak() {
     const text = ttsText.trim();
@@ -201,22 +193,23 @@ export function Soundboard({ players }: SoundboardProps) {
         )}
       </div>
 
-      {/* One-tap effect grid */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
-          gap: space(2),
-          marginTop: space(4),
-        }}
-      >
-        {/* Storm gets its own button up top — it's the marquee cue. */}
-        <SoundButton
-          label="Storm"
-          onClick={fireStorm}
-          disabled={!targetReady || busyId === "storm"}
-        />
-        {EFFECT_BUTTONS.map((b) => (
+      {/* Loops — sustained; stop them from the Active panel. */}
+      <label style={{ ...labelStyle, marginTop: space(5) }}>Loops</label>
+      <div style={effectGridStyle}>
+        {LOOP_BUTTONS.map((b) => (
+          <SoundButton
+            key={b.id}
+            label={b.label}
+            onClick={() => fireEffect(b.id, b.label, b.spec)}
+            disabled={!targetReady || busyId === b.id}
+          />
+        ))}
+      </div>
+
+      {/* One-shots — transient; auto-close. */}
+      <label style={{ ...labelStyle, marginTop: space(5) }}>One-shots</label>
+      <div style={effectGridStyle}>
+        {ONESHOT_BUTTONS.map((b) => (
           <SoundButton
             key={b.id}
             label={b.label}
@@ -409,6 +402,13 @@ const labelStyle: React.CSSProperties = {
   letterSpacing: "0.08em",
   textTransform: "uppercase",
   color: "var(--text-dim)",
+};
+
+const effectGridStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
+  gap: space(2),
+  marginTop: space(2),
 };
 
 function sendButtonStyle(disabled: boolean): React.CSSProperties {

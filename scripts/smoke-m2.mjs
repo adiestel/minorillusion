@@ -38,6 +38,16 @@ const waitFor = (s, ev, pred, ms = 3000) =>
     };
     s.on(ev, h);
   });
+const waitUntil = (pred, ms = 4000) =>
+  new Promise((res, rej) => {
+    const t0 = Date.now();
+    const tick = () => {
+      if (pred()) return res();
+      if (Date.now() - t0 > ms) return rej(new Error("waitUntil timeout"));
+      setTimeout(tick, 50);
+    };
+    tick();
+  });
 
 try {
   const gm = conn();
@@ -134,6 +144,73 @@ try {
   check(targeted.ok === true && targeted.deliveredTo === 1, "targeted audio delivered to exactly 1");
   await deliver;
   ok("player received the targeted chime");
+
+  // === control rework: active registry, stop → effect:end, storm strikes ===
+
+  // Keep the latest registry snapshot (earlier tests leave sustained effects;
+  // the server replaces overlapping ambiances, so match on the new id).
+  let latestActive = [];
+  gm.on("effects:active", (a) => {
+    latestActive = a.effects;
+  });
+
+  // Rain LOOP → appears in effects:active as sustained; player gets the loop.
+  let activeP = waitFor(gm, "effects:active", (a) => a.effects.some((e) => e.sustained && e.label === "Rain"));
+  const rainDeliver = waitFor(player, "effect:deliver", (e) => e.kind === "audio" && e.source.cue === "rain");
+  const rainSend = await gm.timeout(5000).emitWithAck("effect:send", {
+    target: { kind: "broadcast" },
+    spec: { kind: "audio", source: { via: "cue", cue: "rain" }, loop: true },
+  });
+  check(rainSend.ok === true, "rain loop effect:send acked");
+  const rainActive = await activeP;
+  check(
+    rainActive.effects.some((e) => e.id === rainSend.effectId && e.sustained),
+    "rain shows in effects:active as a sustained effect",
+  );
+  await rainDeliver;
+  ok("player received the rain loop");
+
+  // Stop the rain → player gets effect:end; rain leaves the registry.
+  const rainEnd = waitFor(player, "effect:end", (i) => i.effectId === rainSend.effectId);
+  activeP = waitFor(gm, "effects:active", (a) => !a.effects.some((e) => e.id === rainSend.effectId));
+  const stopAck = await gm.timeout(5000).emitWithAck("effect:stop", { effectId: rainSend.effectId });
+  check(stopAck.ok === true, "effect:stop acked ok");
+  await rainEnd;
+  ok("player received effect:end for the stopped rain loop");
+  await activeP;
+  ok("rain cleared from effects:active");
+
+  // One-shot thunderclap → transient in the registry with a countdown duration.
+  activeP = waitFor(gm, "effects:active", (a) =>
+    a.effects.some((e) => e.label === "Thunderclap" && e.sustained === false && e.durationMs > 0),
+  );
+  await gm.timeout(5000).emitWithAck("effect:send", {
+    target: { kind: "broadcast" },
+    spec: { kind: "audio", source: { via: "cue", cue: "thunder" } },
+  });
+  await activeP;
+  ok("one-shot thunderclap shows as transient with a countdown duration");
+
+  // Storm → sustained registry entry + a server-driven strike (flash + clap) soon.
+  const flashDeliver = waitFor(player, "effect:deliver", (e) => e.kind === "flash", 4000);
+  const stormClap = waitFor(player, "effect:deliver", (e) => e.kind === "audio" && e.source.cue === "thunder", 4000);
+  const stormSend = await gm.timeout(5000).emitWithAck("effect:send", {
+    target: { kind: "broadcast" },
+    spec: { kind: "ambiance", scene: "storm" },
+  });
+  check(stormSend.ok === true, "storm effect:send acked");
+  await waitUntil(() => latestActive.some((e) => e.id === stormSend.effectId && e.label === "Storm"));
+  ok("storm shows in effects:active as sustained (new id)");
+  await flashDeliver;
+  ok("storm runner delivered a lightning flash to the player");
+  await stormClap;
+  ok("storm runner delivered a (randomly-targeted) thunderclap");
+
+  // Stop the storm → player clears it via effect:end.
+  const stormEnd = waitFor(player, "effect:end", (i) => i.effectId === stormSend.effectId);
+  await gm.timeout(5000).emitWithAck("effect:stop", { effectId: stormSend.effectId });
+  await stormEnd;
+  ok("storm stopped — player received effect:end");
 
   // --- TTS (live ElevenLabs) — opt-in via SMOKE_TTS=1 ---------------------
   if (process.env.SMOKE_TTS === "1") {

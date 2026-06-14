@@ -5,7 +5,12 @@ import {
   type EffectSpec,
   type Target,
 } from "@minorillusion/contract";
-import { buildCue, buildEffect, resolveTargets } from "./effects.js";
+import {
+  buildCue,
+  buildEffect,
+  classifyEffect,
+  resolveTargets,
+} from "./effects.js";
 import type { TtsProvider } from "./tts.js";
 
 /**
@@ -192,6 +197,27 @@ describe("buildEffect", () => {
     expect(deliveredEffectSchema.safeParse(effect).success).toBe(true);
   });
 
+  it("flash: carries intensity + durationMs + startDelayMs when supplied", async () => {
+    const effect = await buildEffect(
+      { kind: "flash", intensity: 0.85 },
+      { durationMs: 320, startDelayMs: 150 },
+    );
+    if (effect.kind !== "flash") throw new Error("narrowing");
+    expect(effect.intensity).toBe(0.85);
+    expect(effect.durationMs).toBe(320);
+    expect(effect.startDelayMs).toBe(150);
+    expect(deliveredEffectSchema.safeParse(effect).success).toBe(true);
+  });
+
+  it("flash: omits intensity / durationMs when not supplied", async () => {
+    const effect = await buildEffect({ kind: "flash" });
+    if (effect.kind !== "flash") throw new Error("narrowing");
+    expect(effect).not.toHaveProperty("intensity");
+    expect(effect).not.toHaveProperty("durationMs");
+    expect(effect).not.toHaveProperty("startDelayMs");
+    expect(deliveredEffectSchema.safeParse(effect).success).toBe(true);
+  });
+
   it("attaches startDelayMs only when supplied", async () => {
     const spec: EffectSpec = { kind: "haptic", pattern: "buzz" };
     const delayed = await buildEffect(spec, { startDelayMs: 750 });
@@ -260,5 +286,138 @@ describe("buildCue", () => {
       throw new Error("expected a resolved tts audio effect");
     }
     expect(only.source.data.startsWith("data:audio/mpeg;base64,")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// classifyEffect — the pure policy for how a GM-initiated effect appears in the
+// active-effects registry (register? sustained? duration? label?). No sockets,
+// no timers — just the decision the socket layer then acts on.
+// ---------------------------------------------------------------------------
+
+describe("classifyEffect", () => {
+  it("audio loop → sustained, registered, cue label", () => {
+    expect(
+      classifyEffect({
+        kind: "audio",
+        source: { via: "cue", cue: "rain" },
+        loop: true,
+      }),
+    ).toEqual({ register: true, sustained: true, label: "Rain" });
+  });
+
+  it("audio loop → honors an explicit label over the cue label", () => {
+    expect(
+      classifyEffect({
+        kind: "audio",
+        source: { via: "cue", cue: "rain" },
+        loop: true,
+        label: "Downpour",
+      }),
+    ).toEqual({ register: true, sustained: true, label: "Downpour" });
+  });
+
+  it("audio cue thunder → transient, durationMs 5000, label Thunderclap", () => {
+    expect(
+      classifyEffect({ kind: "audio", source: { via: "cue", cue: "thunder" } }),
+    ).toEqual({
+      register: true,
+      sustained: false,
+      durationMs: 5000,
+      label: "Thunderclap",
+    });
+  });
+
+  it("audio cue chime → transient, durationMs 4000, label Chime", () => {
+    expect(
+      classifyEffect({ kind: "audio", source: { via: "cue", cue: "chime" } }),
+    ).toEqual({
+      register: true,
+      sustained: false,
+      durationMs: 4000,
+      label: "Chime",
+    });
+  });
+
+  it("audio cue heartbeat → label is the capitalized cue name", () => {
+    expect(
+      classifyEffect({ kind: "audio", source: { via: "cue", cue: "heartbeat" } }),
+    ).toEqual({
+      register: true,
+      sustained: false,
+      durationMs: 4000,
+      label: "Heartbeat",
+    });
+  });
+
+  it("audio tts → transient, label Speak, duration scales with text length", () => {
+    const c = classifyEffect({
+      kind: "audio",
+      source: { via: "tts", text: "Hi" }, // 2 chars → 1500 + 120 = 1620
+    });
+    expect(c.register).toBe(true);
+    expect(c.sustained).toBe(false);
+    expect(c.label).toBe("Speak");
+    expect(c.durationMs).toBe(1620);
+  });
+
+  it("audio tts → duration is capped at 20000ms for long text", () => {
+    const c = classifyEffect({
+      kind: "audio",
+      source: { via: "tts", text: "x".repeat(600) },
+    });
+    expect(c.durationMs).toBe(20_000);
+  });
+
+  it("ambiance storm → sustained, registered, label Storm", () => {
+    expect(classifyEffect({ kind: "ambiance", scene: "storm" })).toEqual({
+      register: true,
+      sustained: true,
+      label: "Storm",
+    });
+  });
+
+  it("ambiance ember → sustained, registered, label Stir embers", () => {
+    expect(classifyEffect({ kind: "ambiance", scene: "ember" })).toEqual({
+      register: true,
+      sustained: true,
+      label: "Stir embers",
+    });
+  });
+
+  it("ambiance clear → not registered (the socket layer treats it as a stop)", () => {
+    expect(classifyEffect({ kind: "ambiance", scene: "clear" })).toEqual({
+      register: false,
+      sustained: false,
+      label: "Calm",
+    });
+  });
+
+  it("heartbeat → transient, durationMs computed from beats / bpm", () => {
+    // defaults: 8 beats at 60 bpm = 8s.
+    expect(classifyEffect({ kind: "heartbeat" })).toEqual({
+      register: true,
+      sustained: false,
+      durationMs: 8000,
+      label: "Heartbeat",
+    });
+    // 16 beats at 120 bpm = 8s as well; 4 beats at 60 bpm = 4s.
+    expect(classifyEffect({ kind: "heartbeat", bpm: 60, beats: 4 }).durationMs).toBe(
+      4000,
+    );
+  });
+
+  it("message → not registered (never shown in the panel)", () => {
+    expect(
+      classifyEffect({ kind: "message", body: "hi", mode: "silent" }).register,
+    ).toBe(false);
+  });
+
+  it("haptic → not registered (never shown in the panel)", () => {
+    expect(classifyEffect({ kind: "haptic", pattern: "buzz" }).register).toBe(false);
+  });
+
+  it("flash → not registered (never shown in the panel)", () => {
+    expect(classifyEffect({ kind: "flash", intensity: 0.85 }).register).toBe(false);
   });
 });

@@ -49,11 +49,14 @@ The engine is one mechanism (actor → router → target). An **EffectSpec** + a
 
 **Implemented (M2 — the cheap-path core):**
 - **message** — the parchment (M1).
-- **audio** — a bundled SFX cue (`thunder`/`chime`/`heartbeat`/`rain`) or **TTS** (text → inline `data:` audio via the ElevenLabs adapter). Unlocked on the consent/join tap.
+- **audio** — a bundled SFX cue (`thunder`/`chime`/`heartbeat`/`rain`) or **TTS** (text → inline `data:` audio via the ElevenLabs adapter). A loop (e.g. `rain`) is *sustained*; a one-shot is *transient*. Unlocked on the consent/join tap.
 - **haptic** — named patterns (`buzz`/`double`/`rumble`/`heartbeat`/`success`); web `navigator.vibrate` + a `@capacitor/haptics` native seam.
-- **ambiance** — a persistent scene: `clear` (resting ember), **`storm`** (cold vignette + photosensitivity-safe JS-timed lightning + faint rain streaks + a rain audio bed — cheap CSS, not video), `ember` (stirred warm glow).
+- **ambiance** — a persistent scene: `clear` (resting ember), **`storm`** (cold vignette + faint rain streaks + a rain audio bed), `ember` (stirred warm glow). Cheap CSS, not video.
+- **flash** — a brief, photosensitivity-safe full-screen light wash (the storm's lightning; also reusable for spell/camera flashes).
 - **heartbeat** — a red edge-vignette pulse + haptic train, `bpm`×`beats`.
-- The **GM soundboard** fires these one-tap (Thunderclap, Storm cue, Calm, Stir embers, Heartbeat, Buzz/Rumble, Speak). **Consent-at-join** discloses what the GM can do (sound/vibration/screen) and that mic/camera are never silent.
+- **Storm = server-driven** (D15): the `storm` ambiance + a server runner that fires synced strikes — a room-wide **flash** + a **thunderclap on one random player's phone** (thunder from one corner of the table). The client no longer self-times lightning.
+
+**GM control model (D15):** effects are **sustained** (loops/ambiance/storm — run until stopped) or **transient** (one-shots with a countdown). The soundboard is split into **Loops** vs **One-shots**; an **Active Effects** panel shows what's running and *for whom*, with a Stop on sustained rows and a live countdown on transient ones (server-tracked registry → `effects:active`; `effect:stop` → `effect:end`). **Consent-at-join** discloses what the GM can do (sound/vibration/screen) and that mic/camera are never silent.
 
 **Still aspirational (later milestones), all the same engine:**
 - **Atmospheric / broadcast:** staggered lightning across phones, darkness+silence (then one torch as the party's only light), surround soundscape (phones as a distributed speaker array), spatial whispers (voice hops device-to-device), tremor.

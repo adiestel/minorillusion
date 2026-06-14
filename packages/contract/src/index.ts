@@ -137,6 +137,18 @@ export type HapticPattern = z.infer<typeof hapticPattern>;
 export const ambianceScene = z.enum(["clear", "storm", "ember"]);
 export type AmbianceScene = z.infer<typeof ambianceScene>;
 
+/**
+ * Approximate playout length of each one-shot cue, so the GM's active-effects
+ * panel can show a countdown until a transient effect auto-closes. `rain` loops,
+ * so it has no fixed duration (0 = sustained).
+ */
+export const AUDIO_CUE_DURATION_MS: Record<AudioCue, number> = {
+  thunder: 5000,
+  chime: 4000,
+  heartbeat: 4000,
+  rain: 0,
+};
+
 /** How a message behaves on the player's screen (see docs/DESIGN.md). */
 export const messageMode = z.enum(["acknowledge", "auto_dismiss", "silent"]);
 export type MessageMode = z.infer<typeof messageMode>;
@@ -201,12 +213,20 @@ export const heartbeatSpecSchema = z.object({
 });
 export type HeartbeatSpec = z.infer<typeof heartbeatSpecSchema>;
 
+/** A brief full-screen light flash (e.g. a storm strike). Transient. */
+export const flashSpecSchema = z.object({
+  kind: z.literal("flash"),
+  intensity: z.number().min(0).max(1).optional(),
+});
+export type FlashSpec = z.infer<typeof flashSpecSchema>;
+
 export const effectSpecSchema = z.discriminatedUnion("kind", [
   messageSpecSchema,
   audioSpecSchema,
   hapticSpecSchema,
   ambianceSpecSchema,
   heartbeatSpecSchema,
+  flashSpecSchema,
 ]);
 export type EffectSpec = z.infer<typeof effectSpecSchema>;
 
@@ -276,6 +296,16 @@ export const heartbeatEffectSchema = z.object({
 });
 export type HeartbeatEffect = z.infer<typeof heartbeatEffectSchema>;
 
+export const flashEffectSchema = z.object({
+  id: z.string().uuid(),
+  kind: z.literal("flash"),
+  intensity: z.number().min(0).max(1).optional(),
+  durationMs: z.number().int().positive().max(5000).optional(),
+  startDelayMs,
+  createdAt: z.string().datetime(),
+});
+export type FlashEffect = z.infer<typeof flashEffectSchema>;
+
 /** Union of effect instances delivered to players. */
 export const deliveredEffectSchema = z.discriminatedUnion("kind", [
   messageEffectSchema,
@@ -283,6 +313,7 @@ export const deliveredEffectSchema = z.discriminatedUnion("kind", [
   hapticEffectSchema,
   ambianceEffectSchema,
   heartbeatEffectSchema,
+  flashEffectSchema,
 ]);
 export type DeliveredEffect = z.infer<typeof deliveredEffectSchema>;
 
@@ -333,6 +364,37 @@ export const sendCueResultSchema = z.discriminatedUnion("ok", [
 export type SendCueResult = z.infer<typeof sendCueResultSchema>;
 
 // ---------------------------------------------------------------------------
+// Active effects — the GM's live registry of what is running (and for whom).
+// A sustained effect (a loop, an ambiance scene, a storm) runs until the GM
+// stops it; a transient effect (a one-shot cue, a heartbeat) auto-closes after
+// `durationMs`. The record `id` IS the delivered effect id, so effect:stop /
+// effect:end reuse the id the player already holds. (M2 control rework.)
+// ---------------------------------------------------------------------------
+
+export const activeEffectSchema = z.object({
+  id: z.string().uuid(),
+  kind: z.string(),
+  /** Human label for the GM panel, e.g. "Rain", "Storm", "Thunderclap". */
+  label: z.string(),
+  target: targetSchema,
+  /** true = runs until stopped; false = transient, closes after durationMs. */
+  sustained: z.boolean(),
+  startedAt: z.string().datetime(),
+  /** Transient effects only: ms from startedAt until it auto-closes. */
+  durationMs: z.number().int().nonnegative().optional(),
+});
+export type ActiveEffect = z.infer<typeof activeEffectSchema>;
+
+export const activeEffectsSchema = z.object({
+  circleId: z.string().uuid(),
+  effects: z.array(activeEffectSchema),
+});
+export type ActiveEffects = z.infer<typeof activeEffectsSchema>;
+
+export const stopEffectResultSchema = z.object({ ok: z.boolean() });
+export type StopEffectResult = z.infer<typeof stopEffectResultSchema>;
+
+// ---------------------------------------------------------------------------
 // Socket.IO event maps (typed on both ends)
 // ---------------------------------------------------------------------------
 
@@ -341,8 +403,12 @@ export interface ServerToClientEvents {
   "server:error": (message: string) => void;
   /** Server pushes a concrete effect to a player. */
   "effect:deliver": (effect: DeliveredEffect) => void;
+  /** Server tells a player to stop/clear a specific active effect (loop/ambiance). */
+  "effect:end": (info: { effectId: string }) => void;
   /** Server notifies the GM that a player acknowledged an effect. */
   "effect:acked": (info: { effectId: string; playerId: string }) => void;
+  /** Server pushes the circle's live active-effects registry to the GM(s). */
+  "effects:active": (active: ActiveEffects) => void;
 }
 
 export interface ClientToServerEvents {
@@ -370,6 +436,11 @@ export interface ClientToServerEvents {
   ) => void;
   /** Player acknowledges an effect (acknowledge mode). */
   "effect:ack": (info: { effectId: string }) => void;
+  /** GM stops a sustained effect (or cancels a transient one early). */
+  "effect:stop": (
+    req: { effectId: string },
+    ack: (result: StopEffectResult) => void,
+  ) => void;
 }
 
 export const DEFAULT_SERVER_PORT = 3001;
