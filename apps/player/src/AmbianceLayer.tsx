@@ -99,7 +99,7 @@ function StormLayer({ intensity }: { intensity: number }) {
   useEffect(() => {
     const handle: AudioHandle = audio.play(
       { via: "cue", cue: "rain" },
-      { loop: true, gain: 0.6 },
+      { loop: true, gain: 0.45 },
     );
     return () => handle.stop();
   }, []);

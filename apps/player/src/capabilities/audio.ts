@@ -3,28 +3,38 @@
  *
  * The cheap path: bundled .mp3 cues + inline data: URLs. Playback goes through
  * the **Web Audio API** — once the AudioContext is resumed inside a user gesture
- * (`unlock()`), decoded buffers play on demand with NO further autoplay gating.
- * (An earlier HTMLAudioElement version played fine only with DevTools open, which
- * relaxes Chrome's autoplay policy — fresh `new Audio().play()` calls fired from
- * a socket event, outside the brief post-tap activation window, were silently
- * blocked. Routing through the running context fixes that.) Works identically
- * native (Capacitor serves the web layer) and as a PWA; falls back to an
- * HTMLAudioElement where AudioContext is unavailable, and no-ops where neither is.
+ * (`unlock()`), decoded buffers play on demand with NO further autoplay gating,
+ * loop **gaplessly** (sample-accurate), and **fade** via a per-source GainNode.
+ * (An HTMLAudioElement version played only with DevTools open — autoplay-gated —
+ * and looped with an audible gap; routing through the running context fixes both.)
+ * Falls back to an HTMLAudioElement where AudioContext is unavailable.
+ *
+ * Looping beds (rain / storm) **fade in and out** (default 5s) so starting and
+ * stopping is gentle and overlapping loops crossfade/blend; one-shots are instant.
  *
  * iOS gotcha: the context must be resumed from inside a user gesture. `unlock()`
  * does that and MUST be called from a tap handler (the consent button, or a
  * one-shot pointerdown on reconnect) — see Consent.tsx / main.tsx.
- *
- * Loops (e.g. the storm rain bed) are owned by their renderer (AmbianceLayer),
- * which holds the returned handle and calls stop() on unmount; stopAll() is the
- * blunt "ambiance went clear" sweep.
  */
 
 import type { AudioCue } from "@minorillusion/contract";
 
-/** Resolve a cue id to its bundled asset. apps/player/public/audio/<cue>.mp3 */
+/** Cues with N numbered variations on disk (<cue>1.mp3 … <cue>N.mp3). */
+const CUE_VARIANTS: Partial<Record<AudioCue, number>> = { thunder: 5 };
+/** Last variant played per cue, so we don't repeat the same one back-to-back. */
+const lastVariant: Partial<Record<AudioCue, number>> = {};
+
+/** Default fade for looping beds (ms); one-shots don't fade. */
+const DEFAULT_LOOP_FADE_MS = 5000;
+
+/** Resolve a cue id to its bundled asset, picking a random variation if it has them. */
 function cueUrl(cue: AudioCue): string {
-  return `/audio/${cue}.mp3`;
+  const n = CUE_VARIANTS[cue];
+  if (n === undefined || n <= 1) return `/audio/${cue}.mp3`;
+  let v = 1 + Math.floor(Math.random() * n);
+  if (v === lastVariant[cue]) v = (v % n) + 1; // avoid an immediate repeat
+  lastVariant[cue] = v;
+  return `/audio/${cue}${v}.mp3`;
 }
 
 /** Source as delivered on the wire: a bundled cue, or an inline data: URL. */
@@ -36,9 +46,13 @@ interface PlayOptions {
   /** 0..1 playback gain (default 1). */
   gain?: number;
   loop?: boolean;
+  /** Fade-in ms (defaults to 5s for loops, 0 for one-shots). */
+  fadeInMs?: number;
+  /** Fade-out ms on stop (defaults to 5s for loops, 0 for one-shots). */
+  fadeOutMs?: number;
 }
 
-/** Handle returned from play(); stop() halts that one sound. */
+/** Handle returned from play(); stop() halts that one sound (fading if a loop). */
 export interface AudioHandle {
   stop: () => void;
 }
@@ -48,7 +62,7 @@ interface AudioCapability {
   unlock(): void;
   /** Play a cue / data source. Returns a handle whose stop() halts it. */
   play(source: PlaySource, opts?: PlayOptions): AudioHandle;
-  /** Stop + clean up every currently-tracked sound. */
+  /** Stop + clean up every currently-tracked sound (loops fade out). */
   stopAll(): void;
 }
 
@@ -69,17 +83,24 @@ const hasAudioElement = typeof Audio !== "undefined";
 
 const NOOP_HANDLE: AudioHandle = { stop: () => {} };
 
+/** One live source + its gain (for fades) + how long to fade out on stop. */
+interface ActiveSource {
+  node: AudioBufferSourceNode;
+  gain: GainNode;
+  fadeOutMs: number;
+}
+
 // ---------------------------------------------------------------------------
 // Implementation
 // ---------------------------------------------------------------------------
 
 class WebAudio implements AudioCapability {
   private ctx: AudioContext | null = null;
-  /** Decoded cue buffers, kept for the app's life (a tiny bounded set). */
+  /** Decoded cue buffers, kept for the app's life (a small bounded set). */
   private readonly cueBuffers = new Map<string, Promise<AudioBuffer>>();
-  /** Live source nodes, so stopAll() can sweep them. */
-  private readonly active = new Set<AudioBufferSourceNode>();
-  /** Live HTMLAudioElements when running on the (no-WebAudio) fallback path. */
+  /** Live sources, so stopAll() can sweep them. */
+  private readonly active = new Set<ActiveSource>();
+  /** Live HTMLAudioElements when on the (no-WebAudio) fallback path. */
   private readonly activeEls = new Set<HTMLAudioElement>();
 
   private ensureCtx(): AudioContext | null {
@@ -142,30 +163,42 @@ class WebAudio implements AudioCapability {
     const ctx = this.ensureCtx();
     const url = source.via === "cue" ? cueUrl(source.cue) : source.data;
 
-    // Fallback: no Web Audio → HTMLAudioElement (autoplay-policy caveats apply).
+    // Fallback: no Web Audio → HTMLAudioElement (no fades; autoplay caveats apply).
     if (ctx === null) return this.playElement(url, opts);
 
     // The context was resumed on the unlock gesture; re-resume if the browser
     // suspended it while idle (harmless when already running).
     if (ctx.state === "suspended") void ctx.resume();
 
+    const loop = opts.loop ?? false;
+    const targetGain = opts.gain ?? 1;
+    const fadeInMs = opts.fadeInMs ?? (loop ? DEFAULT_LOOP_FADE_MS : 0);
+    const fadeOutMs = opts.fadeOutMs ?? (loop ? DEFAULT_LOOP_FADE_MS : 0);
+
     // play() is synchronous but decode is async — track stop intent across it.
-    const handleState: { stopped: boolean; node: AudioBufferSourceNode | null } = {
+    const state: { stopped: boolean; entry: ActiveSource | null } = {
       stopped: false,
-      node: null,
+      entry: null,
     };
 
     this.decode(url, source.via === "cue")
       .then((buf) => {
-        if (handleState.stopped) return;
+        if (state.stopped) return;
         const node = ctx.createBufferSource();
         node.buffer = buf;
-        node.loop = opts.loop ?? false;
+        node.loop = loop;
         const gain = ctx.createGain();
-        gain.gain.value = opts.gain ?? 1;
+        const now = ctx.currentTime;
+        if (fadeInMs > 0) {
+          gain.gain.setValueAtTime(0, now);
+          gain.gain.linearRampToValueAtTime(targetGain, now + fadeInMs / 1000);
+        } else {
+          gain.gain.setValueAtTime(targetGain, now);
+        }
         node.connect(gain).connect(ctx.destination);
+        const entry: ActiveSource = { node, gain, fadeOutMs };
         node.onended = () => {
-          this.active.delete(node);
+          this.active.delete(entry);
           try {
             node.disconnect();
             gain.disconnect();
@@ -173,8 +206,8 @@ class WebAudio implements AudioCapability {
             /* already torn down */
           }
         };
-        this.active.add(node);
-        handleState.node = node;
+        this.active.add(entry);
+        state.entry = entry;
         node.start(0);
       })
       .catch(() => {
@@ -183,23 +216,45 @@ class WebAudio implements AudioCapability {
 
     return {
       stop: () => {
-        handleState.stopped = true;
-        const node = handleState.node;
-        if (node !== null) {
-          this.active.delete(node);
-          try {
-            node.onended = null;
-            node.stop();
-            node.disconnect();
-          } catch {
-            /* already stopped */
-          }
-        }
+        state.stopped = true;
+        if (state.entry !== null) this.fadeOutAndStop(state.entry);
       },
     };
   }
 
-  /** HTMLAudioElement fallback (only when AudioContext is unavailable). */
+  /** Ramp a source's gain to 0 over its fadeOutMs, then stop it (or stop now). */
+  private fadeOutAndStop(entry: ActiveSource): void {
+    if (!this.active.delete(entry)) return; // already stopping/ended
+    const { node, gain, fadeOutMs } = entry;
+    const ctx = this.ctx;
+    try {
+      if (fadeOutMs > 0 && ctx !== null) {
+        const now = ctx.currentTime;
+        const cur = gain.gain.value;
+        gain.gain.cancelScheduledValues(now);
+        gain.gain.setValueAtTime(cur, now);
+        gain.gain.linearRampToValueAtTime(0, now + fadeOutMs / 1000);
+        node.onended = () => {
+          try {
+            node.disconnect();
+            gain.disconnect();
+          } catch {
+            /* ignore */
+          }
+        };
+        node.stop(now + fadeOutMs / 1000);
+      } else {
+        node.onended = null;
+        node.stop();
+        node.disconnect();
+        gain.disconnect();
+      }
+    } catch {
+      /* already stopped */
+    }
+  }
+
+  /** HTMLAudioElement fallback (only when AudioContext is unavailable; no fades). */
   private playElement(url: string, opts: PlayOptions): AudioHandle {
     if (!hasAudioElement) return NOOP_HANDLE;
     let el: HTMLAudioElement;
@@ -228,16 +283,7 @@ class WebAudio implements AudioCapability {
   }
 
   stopAll(): void {
-    for (const node of this.active) {
-      try {
-        node.onended = null;
-        node.stop();
-        node.disconnect();
-      } catch {
-        /* ignore */
-      }
-    }
-    this.active.clear();
+    for (const entry of [...this.active]) this.fadeOutAndStop(entry);
     for (const el of this.activeEls) {
       try {
         el.pause();

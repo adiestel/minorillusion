@@ -12,7 +12,7 @@
  */
 
 import { useEffect, useRef, CSSProperties } from "react";
-import { haptics } from "./capabilities/index";
+import { audio, haptics } from "./capabilities/index";
 import { HAPTIC_PATTERNS } from "./hapticPatterns";
 
 const STYLE_ID = "mi-heartbeat-styles";
@@ -86,6 +86,9 @@ export function Heartbeat({ bpm, beats, onDone }: HeartbeatProps) {
       }
 
       haptics.vibrate(HAPTIC_PATTERNS.heartbeat);
+      // A single lub-dub thump per beat, synced with the pulse + haptic so bpm
+      // drives sight, touch, and sound together.
+      audio.play({ via: "cue", cue: "heartbeat" }, { gain: 0.9 });
 
       if (count >= safeBeats) {
         // Let the final pulse breathe out before unmounting.
