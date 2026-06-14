@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { Server, type Socket } from "socket.io";
 import {
@@ -10,6 +11,7 @@ import {
   sendCueRequestSchema,
   sendEffectRequestSchema,
   viewportSchema,
+  whisperscapeRequestSchema,
   type ActiveEffect,
   type AmbianceScene,
   type ClientToServerEvents,
@@ -26,6 +28,7 @@ import {
   resolveTargets,
   type EffectClassification,
 } from "./effects.js";
+import { getTtsProvider } from "./tts.js";
 
 /**
  * Typed Socket.IO server for the M0 realtime core. Rooms map 1:1 to circle ids;
@@ -67,6 +70,8 @@ interface ActiveEffectRecord {
   expireTimer?: ReturnType<typeof setTimeout>;
   /** Storm records: cancels the self-rescheduling strike runner. */
   stopStorm?: () => void;
+  /** Whisperscape records: cancels the phrase runner + ends the bed. */
+  stopWhispers?: () => void;
 }
 
 /**
@@ -127,6 +132,34 @@ class ActiveEffectRegistry {
   }
 
   /**
+   * Register a server-orchestrated sustained effect that has no single delivered
+   * effect of its own (e.g. a whisperscape: a bed + a phrase runner). The caller
+   * owns teardown via the record's stop hooks.
+   */
+  registerRaw(
+    circleId: string,
+    id: string,
+    kind: string,
+    label: string,
+    target: Target,
+  ): void {
+    let circle = this.byCircle.get(circleId);
+    if (!circle) {
+      circle = new Map();
+      this.byCircle.set(circleId, circle);
+    }
+    circle.set(id, {
+      id,
+      kind,
+      label,
+      target,
+      sustained: true,
+      startedAt: new Date().toISOString(),
+    });
+    this.push(circleId);
+  }
+
+  /**
    * Drop a record by id: clears its expiry timer + stops its storm runner, then
    * re-pushes the thinned registry. Safe to call for an unknown id (no-op).
    */
@@ -136,6 +169,7 @@ class ActiveEffectRegistry {
     if (!circle || !record) return;
     if (record.expireTimer) clearTimeout(record.expireTimer);
     record.stopStorm?.();
+    record.stopWhispers?.();
     circle.delete(effectId);
     if (circle.size === 0) this.byCircle.delete(circleId);
     this.push(circleId);
@@ -181,6 +215,7 @@ class ActiveEffectRegistry {
     for (const r of circle.values()) {
       if (r.expireTimer) clearTimeout(r.expireTimer);
       r.stopStorm?.();
+      r.stopWhispers?.();
     }
     this.byCircle.delete(circleId);
   }
@@ -390,6 +425,81 @@ export function createSocketServer(
 
     // First strike lands soon after the storm rolls in.
     timer = setTimeout(() => void strike(), 800 + Math.random() * 1200);
+  }
+
+  /**
+   * Run a whisperscape's phrase runner for an active record. A self-rescheduling
+   * timer fires a random library phrase as real (TTS) speech to ONE random
+   * present player — echo + distortion, NO bed (the bed is already the ambience)
+   * — every minGap–maxGap ms. record.stopWhispers() cancels the loop AND ends the
+   * bed on the present players (effect:stop / circle teardown call it). The
+   * library is pre-warmed so synthesis (cached) doesn't delay the first fires.
+   */
+  function startWhisperscape(
+    circleId: string,
+    record: ActiveEffectRecord,
+    opts: {
+      phrases: string[];
+      voiceGain: number;
+      minGap: number;
+      maxGap: number;
+      voice?: string;
+      bedId: string;
+    },
+  ): void {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const { phrases, voiceGain, minGap, maxGap, voice, bedId } = opts;
+
+    // Pre-warm the TTS cache so the first fires aren't delayed by synthesis.
+    const tts = getTtsProvider();
+    for (const phrase of phrases) void tts.synthesize(phrase, voice).catch(() => {});
+
+    const fire = async (): Promise<void> => {
+      if (stopped) return;
+      try {
+        const present = presentPlayerSockets(circleId);
+        const recipientIds = resolveTargets(record.target, [...present.keys()]);
+        const phrase = phrases[Math.floor(Math.random() * phrases.length)];
+        const whisperPlayerId =
+          recipientIds[Math.floor(Math.random() * recipientIds.length)];
+        const sock =
+          whisperPlayerId !== undefined ? present.get(whisperPlayerId) : undefined;
+        if (sock && phrase !== undefined && whisperPlayerId !== undefined) {
+          // echo + distortion + pan, NO bed (the bed is already the ambience).
+          const eff = await buildEffect({
+            kind: "audio",
+            source: { via: "tts", text: phrase, ...(voice ? { voice } : {}) },
+            echo: true,
+            distortion: true,
+            pan: true,
+            gain: voiceGain,
+          });
+          if (!stopped) {
+            sock.emit("effect:deliver", eff);
+            mirrorToGMs(circleId, [whisperPlayerId], eff);
+          }
+        }
+      } catch (err) {
+        app.log.error({ err }, "whisperscape phrase failed");
+      }
+      if (stopped) return;
+      timer = setTimeout(() => void fire(), minGap + Math.random() * (maxGap - minGap));
+    };
+
+    record.stopWhispers = () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      // End the bed on the present in-target players.
+      const present = presentPlayerSockets(circleId);
+      const recipientIds = resolveTargets(record.target, [...present.keys()]);
+      for (const playerId of recipientIds) {
+        present.get(playerId)?.emit("effect:end", { effectId: bedId });
+      }
+    };
+
+    // First phrase after a short, partial gap.
+    timer = setTimeout(() => void fire(), minGap * 0.5 + Math.random() * minGap * 0.5);
   }
 
   io.on("connection", (socket: AppSocket) => {
@@ -637,6 +747,66 @@ export function createSocketServer(
       if (!state || state.playerId !== undefined) return; // GM only
       for (const s of presentPlayerSockets(state.circleId).values()) {
         s.emit("mixer:apply", { gain: parsed.data.gain });
+      }
+    });
+
+    // -- whisperscape:start (GM) -> dissonant bed + random spoken-phrase runner. -
+    socket.on("whisperscape:start", async (req, ack) => {
+      const parsed = whisperscapeRequestSchema.safeParse(req);
+      if (!parsed.success) {
+        ack({ ok: false, error: "Invalid whisperscape request." });
+        return;
+      }
+      const state = bindings.get(socket.id);
+      if (!state || state.playerId !== undefined) {
+        ack({ ok: false, error: "Only a GM in a circle may start a whisperscape." });
+        return;
+      }
+
+      const { target, phrases } = parsed.data;
+      const bedGain = parsed.data.bedGain ?? 0.5;
+      const voiceGain = parsed.data.voiceGain ?? 0.9;
+      const minGap = parsed.data.minGapMs ?? 8000;
+      const maxGap = Math.max(minGap, parsed.data.maxGapMs ?? 20000);
+      const voice = parsed.data.voice;
+
+      try {
+        // Deliver the dissonant bed (a whispers loop) to present in-target players.
+        const present = presentPlayerSockets(state.circleId);
+        const recipientIds = resolveTargets(target, [...present.keys()]);
+        const bed = await buildEffect({
+          kind: "audio",
+          source: { via: "cue", cue: "whispers" },
+          loop: true,
+          gain: bedGain,
+        });
+        let deliveredTo = 0;
+        for (const playerId of recipientIds) {
+          present.get(playerId)?.emit("effect:deliver", bed);
+          deliveredTo++;
+        }
+
+        // Register the sustained record (the GM Active panel shows "Whispers").
+        const recordId = randomUUID();
+        active.registerRaw(state.circleId, recordId, "whisperscape", "Whispers", target);
+        const record = active.get(state.circleId, recordId);
+        if (record) {
+          startWhisperscape(state.circleId, record, {
+            phrases,
+            voiceGain,
+            minGap,
+            maxGap,
+            voice,
+            bedId: bed.id,
+          });
+        }
+        ack({ ok: true, effectId: recordId, deliveredTo });
+      } catch (err) {
+        app.log.error({ err }, "whisperscape:start failed");
+        ack({
+          ok: false,
+          error: err instanceof Error ? err.message : "Failed to start whisperscape.",
+        });
       }
     });
 

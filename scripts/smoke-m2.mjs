@@ -295,6 +295,39 @@ try {
   await rainEnded;
   ok("rain stopped — player received effect:end");
 
+  // --- whisperscape: dissonant bed + random spoken-phrase runner ----------
+  const wsBed = waitFor(player, "effect:deliver", (e) => e.kind === "audio" && e.source.cue === "whispers" && e.loop === true);
+  const wsStart = await gm.timeout(5000).emitWithAck("whisperscape:start", {
+    target: { kind: "broadcast" },
+    phrases: ["come closer", "we have been waiting"],
+    bedGain: 0.5,
+    voiceGain: 0.9,
+    minGapMs: 3000,
+    maxGapMs: 6000,
+  });
+  check(wsStart.ok === true, "whisperscape:start acked");
+  await wsBed;
+  ok("whisperscape delivered the dissonant bed (whispers loop)");
+  await waitUntil(() => latestActive.some((e) => e.id === wsStart.effectId && e.sustained && e.label === "Whispers"));
+  ok("whisperscape shows in effects:active as sustained Whispers");
+
+  if (process.env.SMOKE_TTS === "1") {
+    const phrase = await waitFor(
+      player,
+      "effect:deliver",
+      (e) => e.kind === "audio" && e.source.via === "data" && e.echo === true && e.distortion === true,
+      20000,
+    );
+    check(
+      phrase.distortion === true && phrase.echo === true && phrase.whispers !== true,
+      "whisperscape fired a spoken phrase (echo + distortion, no bed re-add)",
+    );
+  }
+
+  // Stop the whisperscape (cancels the runner + ends the bed).
+  await gm.timeout(5000).emitWithAck("effect:stop", { effectId: wsStart.effectId });
+  ok("whisperscape stopped");
+
   // --- TTS (live ElevenLabs) — opt-in via SMOKE_TTS=1 ---------------------
   if (process.env.SMOKE_TTS === "1") {
     deliver = waitFor(player, "effect:deliver", (e) => e.kind === "audio" && e.source.via === "data", 15000);

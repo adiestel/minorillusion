@@ -472,6 +472,30 @@ export const mixerSetSchema = z.object({ gain: z.number().min(0).max(1) });
 export type MixerSet = z.infer<typeof mixerSetSchema>;
 
 // ---------------------------------------------------------------------------
+// Whisperscape — a sustained whisper ambience: the dissonant bed PLUS a library
+// of phrases that randomly fire as real (TTS) speech to a random player, like
+// thunderclaps in a storm. The fired phrases carry echo + distortion only (the
+// bed is already the ambience, so they don't re-add it). Server-orchestrated
+// (mirrors the storm); stop it via effect:stop on the returned id.
+// ---------------------------------------------------------------------------
+
+export const whisperscapeRequestSchema = z.object({
+  target: targetSchema,
+  /** The phrase library; one is chosen at random per fire. */
+  phrases: z.array(z.string().min(1).max(300)).min(1).max(50),
+  /** 0..1 level of the dissonant bed (default 0.5). */
+  bedGain: z.number().min(0).max(1).optional(),
+  /** 0..1 level of the spoken phrases (default 0.9). */
+  voiceGain: z.number().min(0).max(1).optional(),
+  /** Random gap between phrases (ms); defaults ~8s–20s. */
+  minGapMs: z.number().int().min(2000).max(180_000).optional(),
+  maxGapMs: z.number().int().min(2000).max(180_000).optional(),
+  /** Optional ElevenLabs voice id for the phrases. */
+  voice: z.string().max(80).optional(),
+});
+export type WhisperscapeRequest = z.infer<typeof whisperscapeRequestSchema>;
+
+// ---------------------------------------------------------------------------
 // Effect mirror — a read-only copy of each delivered effect, fanned to the GM
 // so the GM's live Stage can render what every player is seeing (incl. the
 // server-driven storm strikes that never enter the registry). `playerIds` is
@@ -547,6 +571,11 @@ export interface ClientToServerEvents {
   ) => void;
   /** GM sets the master effects volume for the circle's players. */
   "mixer:set": (req: MixerSet) => void;
+  /** GM starts a whisperscape (dissonant bed + random spoken phrases). */
+  "whisperscape:start": (
+    req: WhisperscapeRequest,
+    ack: (result: SendEffectResult) => void,
+  ) => void;
   /** GM stops a sustained effect (or cancels a transient one early). */
   "effect:stop": (
     req: { effectId: string },

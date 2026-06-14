@@ -28,6 +28,7 @@ import { Soundboard } from "./Soundboard";
 import { ActiveEffects } from "./ActiveEffects";
 import { Stage } from "./Stage";
 import { PlayersPanel } from "./PlayersPanel";
+import { WhisperVoices } from "./WhisperVoices";
 
 // ---------------------------------------------------------------------------
 // Session-restore helpers
@@ -379,6 +380,7 @@ function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
           {tab === "effects" && (
             <div style={{ display: "flex", flexDirection: "column", gap: space(6) }}>
               <Soundboard players={players} />
+              <WhisperVoices />
               <ActiveEffects circle={circle} players={players} />
             </div>
           )}
