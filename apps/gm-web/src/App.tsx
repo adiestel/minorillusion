@@ -380,7 +380,7 @@ function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
           {tab === "effects" && (
             <div style={{ display: "flex", flexDirection: "column", gap: space(6) }}>
               <Soundboard players={players} />
-              <WhisperVoices />
+              <WhisperVoices players={players} />
               <ActiveEffects circle={circle} players={players} />
             </div>
           )}

@@ -298,14 +298,15 @@ try {
   // --- whisperscape: dissonant bed + random spoken-phrase runner ----------
   const wsBed = waitFor(player, "effect:deliver", (e) => e.kind === "audio" && e.source.cue === "whispers" && e.loop === true);
   const wsStart = await gm.timeout(5000).emitWithAck("whisperscape:start", {
-    target: { kind: "broadcast" },
+    // Aim the whole whisperscape at the one player (like targeting a storm).
+    target: { kind: "players", playerIds: [playerId] },
     phrases: ["come closer", "we have been waiting"],
     bedGain: 0.5,
     voiceGain: 0.9,
     minGapMs: 3000,
     maxGapMs: 6000,
   });
-  check(wsStart.ok === true, "whisperscape:start acked");
+  check(wsStart.ok === true && wsStart.deliveredTo === 1, "whisperscape:start acked, bed targeted to 1 player");
   await wsBed;
   ok("whisperscape delivered the dissonant bed (whispers loop)");
   await waitUntil(() => latestActive.some((e) => e.id === wsStart.effectId && e.sustained && e.label === "Whispers"));

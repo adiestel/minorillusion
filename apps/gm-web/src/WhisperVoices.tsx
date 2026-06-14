@@ -11,7 +11,12 @@
  * one random player). Phrases persist per browser in localStorage.
  */
 import { useEffect, useState } from "react";
-import type { SendEffectResult, WhisperscapeRequest } from "@minorillusion/contract";
+import type {
+  Player,
+  SendEffectResult,
+  Target,
+  WhisperscapeRequest,
+} from "@minorillusion/contract";
 import { palette, radius, space } from "@minorillusion/design-system";
 import { socket } from "./socket";
 
@@ -27,7 +32,7 @@ function loadPhrases(): string[] {
   }
 }
 
-export function WhisperVoices() {
+export function WhisperVoices({ players }: { players: Player[] }) {
   const [phrases, setPhrases] = useState<string[]>(() => loadPhrases());
   const [draft, setDraft] = useState("");
   const [bedVol, setBedVol] = useState(0.5);
@@ -37,6 +42,10 @@ export function WhisperVoices() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
 
+  // Target — like the storm, the whole whisperscape can aim at one player.
+  const [targetMode, setTargetMode] = useState<"broadcast" | "players">("broadcast");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
   useEffect(() => {
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify(phrases));
@@ -44,6 +53,18 @@ export function WhisperVoices() {
       /* storage unavailable */
     }
   }, [phrases]);
+
+  const connectedPlayers = players.filter((p) => p.connected);
+  const targetReady = targetMode === "broadcast" || selectedIds.size > 0;
+
+  function togglePlayer(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   function addPhrase() {
     const t = draft.trim();
@@ -57,9 +78,17 @@ export function WhisperVoices() {
       setStatus("Add at least one phrase.");
       return;
     }
+    if (!targetReady) {
+      setStatus("Choose at least one player.");
+      return;
+    }
     setBusy(true);
+    const target: Target =
+      targetMode === "broadcast"
+        ? { kind: "broadcast" }
+        : { kind: "players", playerIds: Array.from(selectedIds) };
     const req: WhisperscapeRequest = {
-      target: { kind: "broadcast" },
+      target,
       phrases,
       bedGain: bedVol,
       voiceGain: voiceVol,
@@ -83,6 +112,35 @@ export function WhisperVoices() {
         A dissonant bed with phrases that surface at random — one ear at a time, with
         echo + distortion. Stop it from Active effects.
       </p>
+
+      {/* Target — aim the whole whisperscape at everyone or specific players. */}
+      <div style={{ display: "flex", flexDirection: "column", gap: space(2), marginTop: space(3) }}>
+        <label style={labelStyle}>Target</label>
+        <div style={{ display: "flex", gap: space(3) }}>
+          <ToggleButton active={targetMode === "broadcast"} onClick={() => setTargetMode("broadcast")}>
+            Everyone
+          </ToggleButton>
+          <ToggleButton active={targetMode === "players"} onClick={() => setTargetMode("players")}>
+            Specific players
+          </ToggleButton>
+        </div>
+        {targetMode === "players" && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: space(2), marginTop: space(1) }}>
+            {connectedPlayers.length === 0 ? (
+              <span style={{ fontSize: "0.85rem", color: "var(--text-dim)" }}>No connected players.</span>
+            ) : (
+              connectedPlayers.map((p) => (
+                <PlayerChip
+                  key={p.id}
+                  player={p}
+                  selected={selectedIds.has(p.id)}
+                  onClick={() => togglePlayer(p.id)}
+                />
+              ))
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Phrase library */}
       <div style={{ display: "flex", gap: space(2), marginTop: space(3) }}>
@@ -139,7 +197,11 @@ export function WhisperVoices() {
         <span style={{ color: "var(--text-dim)", fontSize: "0.85rem" }}>seconds</span>
       </div>
 
-      <button onClick={start} disabled={busy || phrases.length === 0} style={startButtonStyle(busy || phrases.length === 0)}>
+      <button
+        onClick={start}
+        disabled={busy || phrases.length === 0 || !targetReady}
+        style={startButtonStyle(busy || phrases.length === 0 || !targetReady)}
+      >
         {busy ? "Starting…" : "Start whispers"}
       </button>
 
@@ -176,6 +238,64 @@ function Slider({ label, value, onChange }: { label: string; value: number; onCh
         style={{ flex: 1, accentColor: palette.ember, cursor: "pointer" }}
       />
     </div>
+  );
+}
+
+function ToggleButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: `${space(2)} ${space(4)}`,
+        background: active ? palette.emberDim : "var(--surface)",
+        color: active ? palette.ember : "var(--text-dim)",
+        border: `1px solid ${active ? palette.ember : palette.ash}`,
+        borderRadius: radius.md,
+        fontSize: "0.85rem",
+        fontWeight: active ? 700 : 400,
+        cursor: "pointer",
+        transition: "background 0.15s, color 0.15s, border-color 0.15s",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function PlayerChip({
+  player,
+  selected,
+  onClick,
+}: {
+  player: Player;
+  selected: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: `${space(2)} ${space(3)}`,
+        background: selected ? palette.emberDim : "var(--surface)",
+        color: selected ? palette.ember : "var(--text-dim)",
+        border: `1px solid ${selected ? palette.ember : palette.ash}`,
+        borderRadius: radius.pill,
+        fontSize: "0.85rem",
+        fontWeight: selected ? 700 : 400,
+        cursor: "pointer",
+        transition: "background 0.15s, color 0.15s, border-color 0.15s",
+      }}
+    >
+      {player.name}
+    </button>
   );
 }
 
