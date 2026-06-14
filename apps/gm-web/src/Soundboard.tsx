@@ -97,6 +97,9 @@ export function Soundboard({ players }: SoundboardProps) {
   // --- TTS row ---
   const [ttsText, setTtsText] = useState("");
 
+  // --- Fade interval for looping weather beds (seconds) ---
+  const [fadeSeconds, setFadeSeconds] = useState(5);
+
   // --- Transient status ---
   const [status, setStatus] = useState<Status>(null);
   const statusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -154,7 +157,11 @@ export function Soundboard({ players }: SoundboardProps) {
       const req: SendCueRequest = { target: buildTarget(), steps: b.steps };
       socket.emit("effect:cue", req, handle);
     } else if (b.spec !== undefined) {
-      const req: SendEffectRequest = { target: buildTarget(), spec: b.spec };
+      // Weather ambiances carry the current fade interval (controls the bed's
+      // fade-in/out, and so the crossfade when switching storm⇄rain).
+      const spec =
+        b.spec.kind === "ambiance" ? { ...b.spec, fadeMs: fadeSeconds * 1000 } : b.spec;
+      const req: SendEffectRequest = { target: buildTarget(), spec };
       socket.emit("effect:send", req, handle);
     }
   }
@@ -228,6 +235,23 @@ export function Soundboard({ players }: SoundboardProps) {
             disabled={!targetReady || busyId === b.id}
           />
         ))}
+      </div>
+
+      {/* Fade interval — how long weather beds fade in/out (and crossfade). */}
+      <div style={{ display: "flex", alignItems: "center", gap: space(3), marginTop: space(3) }}>
+        <label style={{ ...labelStyle, whiteSpace: "nowrap" }} htmlFor="mi-fade">
+          Fade {fadeSeconds}s
+        </label>
+        <input
+          id="mi-fade"
+          type="range"
+          min={0}
+          max={15}
+          step={1}
+          value={fadeSeconds}
+          onChange={(e) => setFadeSeconds(Number(e.target.value))}
+          style={{ flex: 1, accentColor: palette.ember, cursor: "pointer" }}
+        />
       </div>
 
       {/* One-shots — transient; auto-close. */}

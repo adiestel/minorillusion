@@ -103,6 +103,7 @@ export async function buildEffect(
         createdAt,
       };
       if (spec.intensity !== undefined) effect.intensity = spec.intensity;
+      if (spec.fadeMs !== undefined) effect.fadeMs = spec.fadeMs;
       if (opts?.startDelayMs !== undefined) effect.startDelayMs = opts.startDelayMs;
       return effect;
     }

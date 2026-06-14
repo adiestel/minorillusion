@@ -99,19 +99,23 @@ function injectStyles(): void {
 // seconds apart and the GM controls them. This layer is the steady backdrop.
 // ---------------------------------------------------------------------------
 
-/** The rain audio bed — started on mount, stopped on unmount (both fade, 5s). */
-function useRainBed(gain: number): void {
+/**
+ * The rain audio bed — started on mount, stopped on unmount, both fading over
+ * `fadeMs` (GM-controllable; audio defaults to ~5s when undefined). The fade lets
+ * a storm⇄rain switch crossfade rather than cut.
+ */
+function useRainBed(gain: number, fadeMs?: number): void {
   useEffect(() => {
     const handle: AudioHandle = audio.play(
       { via: "cue", cue: "rain" },
-      { loop: true, gain },
+      { loop: true, gain, fadeInMs: fadeMs, fadeOutMs: fadeMs },
     );
     return () => handle.stop();
-  }, [gain]);
+  }, [gain, fadeMs]);
 }
 
-function StormLayer({ intensity }: { intensity: number }) {
-  useRainBed(0.45);
+function StormLayer({ intensity, fadeMs }: { intensity: number; fadeMs?: number }) {
+  useRainBed(0.45, fadeMs);
 
   // intensity nudges the vignette/rain opacity a little.
   const washStyle: CSSProperties = {
@@ -130,8 +134,8 @@ function StormLayer({ intensity }: { intensity: number }) {
 }
 
 /** Rain without the storm: the bed + streaks, no cold vignette, no lightning. */
-function RainLayer({ intensity }: { intensity: number }) {
-  useRainBed(0.45);
+function RainLayer({ intensity, fadeMs }: { intensity: number; fadeMs?: number }) {
+  useRainBed(0.45, fadeMs);
   const rainStyle: CSSProperties = {
     opacity: 0.3 + 0.3 * clamp01(intensity),
   };
@@ -159,9 +163,11 @@ function clamp01(n: number): number {
 export interface AmbianceLayerProps {
   scene: AmbianceScene;
   intensity?: number;
+  /** Fade-in/out ms for the audio bed (undefined → audio's ~5s default). */
+  fadeMs?: number;
 }
 
-export function AmbianceLayer({ scene, intensity = 1 }: AmbianceLayerProps) {
+export function AmbianceLayer({ scene, intensity = 1, fadeMs }: AmbianceLayerProps) {
   // Ensure keyframes/classes exist before first paint of any scene.
   const [ready, setReady] = useState(false);
   useEffect(() => {
@@ -184,8 +190,8 @@ export function AmbianceLayer({ scene, intensity = 1 }: AmbianceLayerProps) {
 
   return (
     <div className="mi-ambiance" aria-hidden="true">
-      {scene === "storm" && <StormLayer intensity={intensity} />}
-      {scene === "rain" && <RainLayer intensity={intensity} />}
+      {scene === "storm" && <StormLayer intensity={intensity} fadeMs={fadeMs} />}
+      {scene === "rain" && <RainLayer intensity={intensity} fadeMs={fadeMs} />}
       {scene === "ember" && <EmberLayer intensity={intensity} />}
     </div>
   );

@@ -205,6 +205,8 @@ export const ambianceSpecSchema = z.object({
   kind: z.literal("ambiance"),
   scene: ambianceScene,
   intensity: z.number().min(0).max(1).optional(),
+  /** Fade-in/out ms for the scene's audio bed (GM-controllable; default ~5000). */
+  fadeMs: z.number().int().min(0).max(30_000).optional(),
 });
 export type AmbianceSpec = z.infer<typeof ambianceSpecSchema>;
 
@@ -285,6 +287,7 @@ export const ambianceEffectSchema = z.object({
   kind: z.literal("ambiance"),
   scene: ambianceScene,
   intensity: z.number().min(0).max(1).optional(),
+  fadeMs: z.number().int().min(0).max(30_000).optional(),
   startDelayMs,
   createdAt: z.string().datetime(),
 });

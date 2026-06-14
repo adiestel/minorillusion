@@ -375,6 +375,8 @@ type AppState =
 interface AmbianceState {
   scene: AmbianceScene;
   intensity?: number;
+  /** GM-set fade-in/out ms for the scene's audio bed (default ~5s in audio). */
+  fadeMs?: number;
 }
 
 /** Transient heartbeat overlay (keyed by effect id; latest wins). */
@@ -474,7 +476,7 @@ function App() {
    * scene just tears the current ambiance down via clearAmbiance.
    */
   const setActiveAmbiance = useCallback(
-    (id: string, scene: AmbianceScene, intensity?: number) => {
+    (id: string, scene: AmbianceScene, intensity?: number, fadeMs?: number) => {
       if (scene === "clear") {
         clearAmbiance();
         return;
@@ -485,7 +487,7 @@ function App() {
       if (prevId !== null && prevId !== id) {
         sustainedCleanups.current.delete(prevId);
       }
-      setAmbiance({ scene, intensity });
+      setAmbiance({ scene, intensity, fadeMs });
       ambianceEffectId.current = id;
       registerSustained(id, clearAmbiance);
     },
@@ -528,7 +530,7 @@ function App() {
           // a cleanup that sweeps back to clear (so effect:end / "Calm" can end
           // it; the AmbianceLayer then unmounts and stops its own rain bed).
           scheduleEffect(effect.startDelayMs, () => {
-            setActiveAmbiance(effect.id, effect.scene, effect.intensity);
+            setActiveAmbiance(effect.id, effect.scene, effect.intensity, effect.fadeMs);
           });
           break;
 
@@ -781,7 +783,7 @@ function App() {
       )}
 
       {/* Persistent ambiance — BEHIND all content (z-index 0). */}
-      <AmbianceLayer scene={ambiance.scene} intensity={ambiance.intensity} />
+      <AmbianceLayer scene={ambiance.scene} intensity={ambiance.intensity} fadeMs={ambiance.fadeMs} />
 
       {/* Transient heartbeat overlay — above ambiance/ember, below parchment. */}
       {heartbeat !== null && (
