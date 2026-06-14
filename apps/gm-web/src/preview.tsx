@@ -42,23 +42,30 @@ if (FREEZE) {
   document.head.appendChild(s);
 }
 
-// --- Mock players (around a virtual table). ---
-function mk(id: string, name: string, connected = true): Player {
+// --- Mock players (around a virtual table), with varied viewports so the demo
+//     shows real aspect ratios + relative size: phones, a tablet, a wide window.
+function mk(
+  id: string,
+  name: string,
+  viewport: { width: number; height: number },
+  connected = true,
+): Player {
   return {
     id,
     circleId: "preview-circle",
     name,
     connected,
     joinedAt: new Date().toISOString(),
+    viewport,
   };
 }
 
 const PLAYERS: Player[] = [
-  mk("p-aria", "Aria"),
-  mk("p-bram", "Bram"),
-  mk("p-cole", "Cole"),
-  mk("p-dax", "Dax"),
-  mk("p-esa", "Esa", false), // disconnected → dimmed tile
+  mk("p-aria", "Aria", { width: 390, height: 844 }), // tall phone
+  mk("p-bram", "Bram", { width: 414, height: 736 }), // shorter phone
+  mk("p-cole", "Cole", { width: 834, height: 1112 }), // tablet (bigger, squarer)
+  mk("p-dax", "Dax", { width: 1280, height: 720 }), // landscape window
+  mk("p-esa", "Esa", { width: 360, height: 800 }, false), // disconnected → dimmed
 ];
 
 // A representative opening frame: weather on three tiles, a strike + pips.

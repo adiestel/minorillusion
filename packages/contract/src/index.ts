@@ -27,6 +27,18 @@ export const circleSchema = z.object({
 });
 export type Circle = z.infer<typeof circleSchema>;
 
+/**
+ * A connected player's live viewport (CSS px) — the size/shape of its canvas.
+ * Reported by the player and carried on presence so the GM Stage can render each
+ * tile at the device's real aspect ratio (and relative size). Transient: it's a
+ * connection attribute, never persisted, and absent for a disconnected player.
+ */
+export const viewportSchema = z.object({
+  width: z.number().int().positive().max(20_000),
+  height: z.number().int().positive().max(20_000),
+});
+export type Viewport = z.infer<typeof viewportSchema>;
+
 export const playerSchema = z.object({
   id: z.string().uuid(),
   circleId: z.string().uuid(),
@@ -34,6 +46,8 @@ export const playerSchema = z.object({
   name: z.string().min(1).max(40),
   connected: z.boolean(),
   joinedAt: z.string().datetime(),
+  /** Live viewport (CSS px) of a connected player; omitted when not reported. */
+  viewport: viewportSchema.optional(),
 });
 export type Player = z.infer<typeof playerSchema>;
 
@@ -462,6 +476,8 @@ export interface ClientToServerEvents {
   ) => void;
   /** Player acknowledges an effect (acknowledge mode). */
   "effect:ack": (info: { effectId: string }) => void;
+  /** Player reports its live viewport (CSS px) so the GM Stage shows true shape. */
+  "player:viewport": (info: Viewport) => void;
   /** GM stops a sustained effect (or cancels a transient one early). */
   "effect:stop": (
     req: { effectId: string },

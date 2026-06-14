@@ -27,18 +27,48 @@ import type {
   EffectMirror,
   Player,
   Target,
+  Viewport,
 } from "@minorillusion/contract";
 import { palette, radius, space } from "@minorillusion/design-system";
 import { socket } from "./socket";
 
 // ---------------------------------------------------------------------------
-// Geometry constants
+// Geometry — each tile is sized to its player's *real* viewport (aspect ratio
+// + a gentle relative size), so a phone looks like a phone, a tablet bigger and
+// squarer, a desktop window wide. A player that hasn't reported a viewport falls
+// back to a typical phone.
 // ---------------------------------------------------------------------------
 
-const TILE_W = 96; // phone tile width (px)
-const SCREEN_H = 132; // the mini phone screen height (px)
 const LABEL_H = 22; // the name label strip below the screen (px)
-const TILE_H = SCREEN_H + LABEL_H;
+const DEFAULT_VP: Viewport = { width: 390, height: 844 }; // typical phone
+
+// The bounding box a tile's screen is fit into, before relative-size scaling.
+const BOX_W = 116;
+const BOX_H = 150;
+
+/** Screen size (px) for a tile: fit the viewport rect into the box, preserving
+ *  aspect ratio, then scale gently by the device's larger dimension. */
+function screenDims(vp: Viewport | undefined): { w: number; h: number } {
+  const v = vp ?? DEFAULT_VP;
+  const aspect = v.width / v.height;
+  // Gentle relative size: a small phone ~0.85×, a big tablet/desktop up to ~1.3×.
+  const scale = clamp(Math.max(v.width, v.height) / 900, 0.82, 1.3);
+  const boxW = BOX_W * scale;
+  const boxH = BOX_H * scale;
+  let h = boxH;
+  let w = h * aspect;
+  if (w > boxW) {
+    w = boxW;
+    h = w / aspect;
+  }
+  return { w: Math.round(w), h: Math.round(h) };
+}
+
+/** Full tile box (the screen plus its name label) — used for layout + clamping. */
+function tileBox(vp: Viewport | undefined): { w: number; h: number } {
+  const s = screenDims(vp);
+  return { w: s.w, h: s.h + LABEL_H };
+}
 
 // Transient overlay lifetimes (ms) — how long a mirrored pip lingers on a tile.
 const FLASH_MS = 950;
@@ -107,6 +137,10 @@ function autoPlace(i: number, n: number): Frac {
 
 function clamp01(n: number): number {
   return Math.min(1, Math.max(0, n));
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, n));
 }
 
 // ---------------------------------------------------------------------------
@@ -261,6 +295,16 @@ export function StageCanvas({
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const { w, h } = useElementSize(canvasRef);
 
+  // --- Per-player tile box (from each player's reported viewport) ---
+  const dimsByPlayer = useMemo(() => {
+    const m = new Map<string, { w: number; h: number }>();
+    for (const p of players) m.set(p.id, tileBox(p.viewport));
+    return m;
+  }, [players]);
+  const dimsRef = useRef(dimsByPlayer);
+  dimsRef.current = dimsByPlayer;
+  const boxOf = (id: string) => dimsRef.current.get(id) ?? tileBox(undefined);
+
   // --- Layout (fractions) ---
   const [layout, setLayout] = useState<Layout>(() => loadLayout(circleId));
   const layoutRef = useRef(layout);
@@ -295,8 +339,9 @@ export function StageCanvas({
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
       const frac = layoutRef.current[playerId] ?? { fx: 0.5, fy: 0.5 };
-      const left = frac.fx * Math.max(1, rect.width - TILE_W);
-      const top = frac.fy * Math.max(1, rect.height - TILE_H);
+      const box = boxOf(playerId);
+      const left = frac.fx * Math.max(1, rect.width - box.w);
+      const top = frac.fy * Math.max(1, rect.height - box.h);
       // Offset between the pointer and the tile origin, so the tile doesn't jump.
       dragState.current = {
         id: playerId,
@@ -315,11 +360,12 @@ export function StageCanvas({
     const canvas = canvasRef.current;
     if (!drag || !canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const left = clampPx(e.clientX - rect.left - drag.dx, rect.width - TILE_W);
-    const top = clampPx(e.clientY - rect.top - drag.dy, rect.height - TILE_H);
+    const box = dimsRef.current.get(drag.id) ?? tileBox(undefined);
+    const left = clampPx(e.clientX - rect.left - drag.dx, rect.width - box.w);
+    const top = clampPx(e.clientY - rect.top - drag.dy, rect.height - box.h);
     const frac: Frac = {
-      fx: left / Math.max(1, rect.width - TILE_W),
-      fy: top / Math.max(1, rect.height - TILE_H),
+      fx: left / Math.max(1, rect.width - box.w),
+      fy: top / Math.max(1, rect.height - box.h),
     };
     setLayout((prev) => ({ ...prev, [drag.id]: frac }));
   }, []);
@@ -361,8 +407,10 @@ export function StageCanvas({
         ) : (
           players.map((p) => {
             const frac = layout[p.id] ?? { fx: 0.5, fy: 0.5 };
-            const left = frac.fx * Math.max(0, w - TILE_W);
-            const top = frac.fy * Math.max(0, h - TILE_H);
+            const box = dimsByPlayer.get(p.id) ?? tileBox(undefined);
+            const screen = screenDims(p.viewport);
+            const left = frac.fx * Math.max(0, w - box.w);
+            const top = frac.fy * Math.max(0, h - box.h);
             return (
               <PhoneTile
                 key={p.id}
@@ -371,6 +419,8 @@ export function StageCanvas({
                 transient={transients[p.id]}
                 left={left}
                 top={top}
+                screenW={screen.w}
+                screenH={screen.h}
                 dragging={draggingId === p.id}
                 onPointerDown={(e) => onTilePointerDown(e, p.id)}
               />
@@ -431,6 +481,9 @@ interface PhoneTileProps {
   transient: Transient | undefined;
   left: number;
   top: number;
+  /** Mini-screen size (px), derived from the player's real viewport. */
+  screenW: number;
+  screenH: number;
   dragging: boolean;
   onPointerDown: (e: React.PointerEvent) => void;
 }
@@ -441,6 +494,8 @@ function PhoneTile({
   transient,
   left,
   top,
+  screenW,
+  screenH,
   dragging,
   onPointerDown,
 }: PhoneTileProps) {
@@ -448,6 +503,8 @@ function PhoneTile({
   const flash = live ? transient?.flash : undefined;
   const pip = live ? transient?.pip : undefined;
   const msg = live ? transient?.msg : undefined;
+  // Ember scales with the screen so it reads right on tiny or wide tiles.
+  const emberSize = Math.round(Math.min(screenW, screenH) * 0.32);
 
   return (
     <div
@@ -456,7 +513,7 @@ function PhoneTile({
         position: "absolute",
         left,
         top,
-        width: TILE_W,
+        width: screenW,
         cursor: dragging ? "grabbing" : "grab",
         touchAction: "none",
         userSelect: "none",
@@ -466,12 +523,13 @@ function PhoneTile({
         filter: dragging ? "brightness(1.08)" : "none",
       }}
     >
-      {/* The phone screen */}
+      {/* The phone screen — sized to the device's real aspect ratio. */}
       <div
         style={{
           position: "relative",
-          height: SCREEN_H,
-          borderRadius: 14,
+          width: screenW,
+          height: screenH,
+          borderRadius: Math.max(8, Math.round(Math.min(screenW, screenH) * 0.12)),
           overflow: "hidden",
           background: palette.nearBlack,
           border: `1.5px solid ${live ? palette.ash : "#241f1a"}`,
@@ -488,10 +546,10 @@ function PhoneTile({
             position: "absolute",
             left: "50%",
             top: "54%",
-            width: 34,
-            height: 34,
-            marginLeft: -17,
-            marginTop: -17,
+            width: emberSize,
+            height: emberSize,
+            marginLeft: -emberSize / 2,
+            marginTop: -emberSize / 2,
             borderRadius: "50%",
             background: `radial-gradient(circle, ${palette.ember}55 0%, ${palette.emberDim}33 45%, transparent 70%)`,
             opacity: scene === "storm" ? 0.35 : 0.8,

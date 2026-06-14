@@ -72,6 +72,30 @@ describe("contract schemas", () => {
     expect(r.success).toBe(true);
   });
 
+  it("accepts a player carrying a live viewport (and rejects a bad one)", () => {
+    const now = new Date().toISOString();
+    const base = {
+      id: crypto.randomUUID(),
+      circleId: crypto.randomUUID(),
+      name: "Aria",
+      connected: true,
+      joinedAt: now,
+    };
+    expect(
+      presenceUpdateSchema.safeParse({
+        circleId: crypto.randomUUID(),
+        players: [{ ...base, viewport: { width: 390, height: 844 } }],
+      }).success,
+    ).toBe(true);
+    // A zero/negative dimension is rejected.
+    expect(
+      presenceUpdateSchema.safeParse({
+        circleId: crypto.randomUUID(),
+        players: [{ ...base, viewport: { width: 0, height: 844 } }],
+      }).success,
+    ).toBe(false);
+  });
+
   it("requires a non-null circle id to be a uuid", () => {
     const bad = circleSchema.safeParse({
       id: "not-a-uuid",

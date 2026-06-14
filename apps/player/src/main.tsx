@@ -659,6 +659,33 @@ function App() {
   }, []);
 
   // ---------------------------------------------------------------------------
+  // Report this device's viewport (size + shape) while joined, so the GM's
+  // Stage can render each tile at the device's true aspect ratio. Fires on
+  // join, on resize, and on orientation change (debounced). Output-only and
+  // privacy-safe: it's just the window dimensions, never screen content.
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    if (appState.screen !== "joined") return;
+    let timer: number | undefined;
+    const report = () => {
+      const width = Math.round(window.innerWidth);
+      const height = Math.round(window.innerHeight);
+      if (width > 0 && height > 0) socket.emit("player:viewport", { width, height });
+    };
+    const onResize = () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      timer = window.setTimeout(report, 300);
+    };
+    report(); // initial report on (re)join
+    window.addEventListener("resize", onResize);
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [appState.screen]);
+
+  // ---------------------------------------------------------------------------
   // Auto-rejoin on mount when a stored session exists
   //
   // Reconnect already consented (D10: don't re-prompt). It has no explicit tap,

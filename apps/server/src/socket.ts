@@ -6,12 +6,14 @@ import {
   openCircleRequestSchema,
   sendCueRequestSchema,
   sendEffectRequestSchema,
+  viewportSchema,
   type ActiveEffect,
   type AmbianceScene,
   type ClientToServerEvents,
   type DeliveredEffect,
   type ServerToClientEvents,
   type Target,
+  type Viewport,
 } from "@minorillusion/contract";
 import { CircleService } from "./circles.js";
 import {
@@ -34,6 +36,8 @@ const DEV_ORIGINS = ["http://localhost:5173", "http://localhost:5174"];
 interface SocketState {
   circleId: string;
   playerId?: string;
+  /** A joined player's last-reported viewport (CSS px); drives the GM Stage. */
+  viewport?: Viewport;
 }
 
 type AppServer = Server<ClientToServerEvents, ServerToClientEvents>;
@@ -211,10 +215,30 @@ export function createSocketServer(
   // back to the originating GM. Entries are cleaned up on GM disconnect.
   const effectSenders = new Map<string, string>();
 
+  /**
+   * Live viewport per connected player, from the socket bindings — the GM Stage
+   * uses it to size each tile to the device's real shape. Only present for
+   * players that have reported one this connection.
+   */
+  function playerViewports(circleId: string): Map<string, Viewport> {
+    const map = new Map<string, Viewport>();
+    for (const state of bindings.values()) {
+      if (state.circleId === circleId && state.playerId && state.viewport) {
+        map.set(state.playerId, state.viewport);
+      }
+    }
+    return map;
+  }
+
   /** Broadcast the current roster of a circle to everyone in its room. */
   async function broadcastPresence(circleId: string): Promise<void> {
     const players = await service.presence(circleId);
-    io.to(circleId).emit("presence:update", { circleId, players });
+    const viewports = playerViewports(circleId);
+    const enriched = players.map((p) => {
+      const vp = viewports.get(p.id);
+      return vp ? { ...p, viewport: vp } : p;
+    });
+    io.to(circleId).emit("presence:update", { circleId, players: enriched });
   }
 
   /**
@@ -589,6 +613,17 @@ export function createSocketServer(
         effectId: info.effectId,
         playerId: state.playerId,
       });
+    });
+
+    // -- player:viewport (player) -> record live viewport, refresh presence. --
+    socket.on("player:viewport", (info) => {
+      const parsed = viewportSchema.safeParse(info);
+      if (!parsed.success) return; // ignore malformed reports
+      const state = bindings.get(socket.id);
+      if (!state?.playerId) return; // only a joined player reports a viewport
+      state.viewport = parsed.data;
+      // Re-broadcast so the GM Stage re-sizes this player's tile (player debounces).
+      void broadcastPresence(state.circleId);
     });
 
     // -- effect:stop (GM) -> end a sustained effect (or cancel a transient). ---

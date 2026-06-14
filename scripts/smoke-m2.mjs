@@ -64,6 +64,20 @@ try {
   check(join.ok === true, "player joined");
   const playerId = join.ok ? join.player.id : "";
 
+  // --- player viewport → carried to the GM via presence (drives the Stage) ---
+  const vpUpdate = waitFor(
+    gm,
+    "presence:update",
+    (u) => u.players.some((p) => p.id === playerId && p.viewport),
+  );
+  player.emit("player:viewport", { width: 412, height: 915 });
+  const vp = await vpUpdate;
+  const me = vp.players.find((p) => p.id === playerId);
+  check(
+    me?.viewport?.width === 412 && me?.viewport?.height === 915,
+    "GM presence carries the player's reported viewport (412x915)",
+  );
+
   // --- audio cue (thunder), broadcast ------------------------------------
   let deliver = waitFor(player, "effect:deliver", (e) => e.kind === "audio");
   let send = await gm.timeout(5000).emitWithAck("effect:send", {
