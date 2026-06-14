@@ -200,6 +200,21 @@ try {
   await rainDeliver;
   ok("player received the rain loop");
 
+  // Whispers LOOP → a chained bed; delivered as a looping "whispers" audio cue
+  // and registered as a sustained "Whispers" effect.
+  const whisperActive = waitFor(gm, "effects:active", (a) => a.effects.some((e) => e.sustained && e.label === "Whispers"));
+  const whisperDeliver = waitFor(player, "effect:deliver", (e) => e.kind === "audio" && e.source.cue === "whispers" && e.loop === true);
+  const whisperSend = await gm.timeout(5000).emitWithAck("effect:send", {
+    target: { kind: "broadcast" },
+    spec: { kind: "audio", source: { via: "cue", cue: "whispers" }, loop: true },
+  });
+  check(whisperSend.ok === true, "whispers loop effect:send acked");
+  await whisperDeliver;
+  ok("player received the whispers loop (cue=whispers, loop)");
+  await whisperActive;
+  ok("whispers shows in effects:active as sustained");
+  await gm.timeout(5000).emitWithAck("effect:stop", { effectId: whisperSend.effectId });
+
   // Stop the rain → player gets effect:end; rain leaves the registry.
   const rainEnd = waitFor(player, "effect:end", (i) => i.effectId === rainSend.effectId);
   activeP = waitFor(gm, "effects:active", (a) => !a.effects.some((e) => e.id === rainSend.effectId));

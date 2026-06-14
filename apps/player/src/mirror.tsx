@@ -40,6 +40,7 @@ import { audio, haptics } from "./capabilities/index";
 // A mirror makes no sound and never vibrates — neutralise the capabilities so
 // the real components (which call them) are silent here.
 audio.play = () => ({ stop: () => {} });
+audio.playWhisperBed = () => ({ stop: () => {} });
 audio.stopAll = () => {};
 audio.unlock = () => {};
 audio.locked = () => false;

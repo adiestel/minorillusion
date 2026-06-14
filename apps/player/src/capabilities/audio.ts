@@ -27,6 +27,20 @@ const lastVariant: Partial<Record<AudioCue, number>> = {};
 /** Default fade for looping beds (ms); one-shots don't fade. */
 const DEFAULT_LOOP_FADE_MS = 5000;
 
+/**
+ * The dissonant-whispers bed: these clips are chained one at a time from a
+ * random start, crossfading with overlap so there's no audible seam, looping
+ * forever. (A special "whispers" cue — see playWhisperBed.)
+ */
+const WHISPER_URLS = [
+  "/audio/dissonant_whispers_1.mp3",
+  "/audio/dissonant_whispers_2.mp3",
+  "/audio/dissonant_whispers_3.mp3",
+  "/audio/dissonant_whispers_4.mp3",
+];
+/** Crossfade overlap between consecutive whisper clips (ms). */
+const WHISPER_CROSSFADE_MS = 1800;
+
 /** Resolve a cue id to its bundled asset, picking a random variation if it has them. */
 function cueUrl(cue: AudioCue): string {
   const n = CUE_VARIANTS[cue];
@@ -57,6 +71,16 @@ export interface AudioHandle {
   stop: () => void;
 }
 
+/** Knobs for the whispers bed. */
+export interface WhisperBedOptions {
+  /** 0..1 bed level (default 0.5). */
+  gain?: number;
+  /** Fade-in ms when the bed starts (default = the crossfade length). */
+  fadeInMs?: number;
+  /** Fade-out ms on stop (default = the crossfade length). */
+  fadeOutMs?: number;
+}
+
 interface AudioCapability {
   /** Prime audio from a user gesture so later programmatic playback is allowed. */
   unlock(): void;
@@ -64,6 +88,9 @@ interface AudioCapability {
   play(source: PlaySource, opts?: PlayOptions): AudioHandle;
   /** Stop + clean up every currently-tracked sound (loops fade out). */
   stopAll(): void;
+  /** Play the dissonant-whispers bed (chained + crossfaded clips, looping).
+   *  Returns a handle whose stop() fades it out. */
+  playWhisperBed(opts?: WhisperBedOptions): AudioHandle;
   /** True when audio is blocked by a suspended context (a gesture is needed). */
   locked(): boolean;
   /** Subscribe to lock-state changes; fires immediately with the current state.
@@ -107,6 +134,10 @@ class WebAudio implements AudioCapability {
   private readonly active = new Set<ActiveSource>();
   /** Live HTMLAudioElements when on the (no-WebAudio) fallback path. */
   private readonly activeEls = new Set<HTMLAudioElement>();
+  /** Running whisper beds (each owns a scheduler), so stopAll() can sweep them. */
+  private readonly beds = new Set<{ stop: () => void }>();
+  /** Decoded whisper clips, loaded once. */
+  private whisperBuffers: Promise<AudioBuffer[]> | null = null;
 
   private ensureCtx(): AudioContext | null {
     if (this.ctx === null && AudioContextCtor !== undefined) {
@@ -165,6 +196,15 @@ class WebAudio implements AudioCapability {
   }
 
   play(source: PlaySource, opts: PlayOptions = {}): AudioHandle {
+    // The whispers cue is a special chained/crossfaded bed, not a single file.
+    if (source.via === "cue" && source.cue === "whispers") {
+      return this.playWhisperBed({
+        gain: opts.gain,
+        fadeInMs: opts.fadeInMs,
+        fadeOutMs: opts.fadeOutMs,
+      });
+    }
+
     const ctx = this.ensureCtx();
     const url = source.via === "cue" ? cueUrl(source.cue) : source.data;
 
@@ -289,6 +329,7 @@ class WebAudio implements AudioCapability {
 
   stopAll(): void {
     for (const entry of [...this.active]) this.fadeOutAndStop(entry);
+    for (const bed of [...this.beds]) bed.stop();
     for (const el of this.activeEls) {
       try {
         el.pause();
@@ -299,6 +340,123 @@ class WebAudio implements AudioCapability {
       }
     }
     this.activeEls.clear();
+  }
+
+  /** Decode the whisper clips once (kept for the app's life). */
+  private loadWhispers(): Promise<AudioBuffer[]> {
+    if (this.whisperBuffers === null) {
+      this.whisperBuffers = Promise.all(WHISPER_URLS.map((u) => this.decode(u, true)));
+    }
+    return this.whisperBuffers;
+  }
+
+  playWhisperBed(opts: WhisperBedOptions = {}): AudioHandle {
+    const ctx = this.ensureCtx();
+    if (ctx === null) return NOOP_HANDLE; // no Web Audio → skip the bed entirely
+    if (ctx.state === "suspended") void ctx.resume();
+
+    const xfade = WHISPER_CROSSFADE_MS / 1000; // seconds
+    const bedGain = opts.gain ?? 0.5;
+    const fadeInMs = opts.fadeInMs ?? WHISPER_CROSSFADE_MS;
+    const fadeOutMs = opts.fadeOutMs ?? WHISPER_CROSSFADE_MS;
+
+    // One master gain for the whole bed: its level + the fade in/out on stop.
+    const master = ctx.createGain();
+    const t0 = ctx.currentTime;
+    master.gain.setValueAtTime(fadeInMs > 0 ? 0.0001 : bedGain, t0);
+    if (fadeInMs > 0) master.gain.linearRampToValueAtTime(bedGain, t0 + fadeInMs / 1000);
+    master.connect(ctx.destination);
+
+    const live = { stopped: false, timer: undefined as ReturnType<typeof setTimeout> | undefined };
+    const nodes = new Set<AudioBufferSourceNode>();
+    let lastIndex = -1;
+
+    // Schedule one clip starting at `startTime`, crossfading in/out, and queue
+    // the next to begin one crossfade before this one ends (an overlap that
+    // hides the seam). Self-reschedules via a look-ahead timer until stopped.
+    const playClip = (buffers: AudioBuffer[], startTime: number): void => {
+      if (live.stopped) return;
+      let i = Math.floor(Math.random() * buffers.length);
+      if (i === lastIndex && buffers.length > 1) i = (i + 1) % buffers.length;
+      lastIndex = i;
+      const buf = buffers[i];
+      if (!buf) return;
+      const dur = buf.duration;
+
+      const node = ctx.createBufferSource();
+      node.buffer = buf;
+      const g = ctx.createGain();
+      // Crossfade in, hold, crossfade out at the tail.
+      g.gain.setValueAtTime(0.0001, startTime);
+      g.gain.linearRampToValueAtTime(1, startTime + xfade);
+      const fadeOutAt = Math.max(startTime + xfade, startTime + dur - xfade);
+      g.gain.setValueAtTime(1, fadeOutAt);
+      g.gain.linearRampToValueAtTime(0.0001, startTime + dur);
+      node.connect(g).connect(master);
+      node.start(startTime);
+      node.stop(startTime + dur + 0.05);
+      nodes.add(node);
+      node.onended = () => {
+        nodes.delete(node);
+        try {
+          node.disconnect();
+          g.disconnect();
+        } catch {
+          /* already gone */
+        }
+      };
+
+      // Next clip overlaps this one's tail by `xfade`.
+      const nextStart = startTime + dur - xfade;
+      const delayMs = Math.max(0, (nextStart - ctx.currentTime - 0.3) * 1000);
+      live.timer = setTimeout(() => playClip(buffers, nextStart), delayMs);
+    };
+
+    this.loadWhispers()
+      .then((buffers) => {
+        if (live.stopped || buffers.length === 0) return;
+        playClip(buffers, ctx.currentTime + 0.06);
+      })
+      .catch(() => {
+        /* decode failed — stay silent */
+      });
+
+    const entry = {
+      stop: () => {
+        if (live.stopped) return;
+        live.stopped = true;
+        if (live.timer) clearTimeout(live.timer);
+        const now = ctx.currentTime;
+        try {
+          master.gain.cancelScheduledValues(now);
+          master.gain.setValueAtTime(master.gain.value, now);
+          master.gain.linearRampToValueAtTime(0.0001, now + fadeOutMs / 1000);
+        } catch {
+          /* ignore */
+        }
+        // After the fade, tear everything down.
+        setTimeout(() => {
+          for (const n of nodes) {
+            try {
+              n.onended = null;
+              n.stop();
+              n.disconnect();
+            } catch {
+              /* already stopped */
+            }
+          }
+          nodes.clear();
+          try {
+            master.disconnect();
+          } catch {
+            /* ignore */
+          }
+        }, fadeOutMs + 120);
+        this.beds.delete(entry);
+      },
+    };
+    this.beds.add(entry);
+    return { stop: entry.stop };
   }
 
   /**

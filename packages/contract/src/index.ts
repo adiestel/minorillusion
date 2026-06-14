@@ -157,8 +157,12 @@ export type Target = z.infer<typeof targetSchema>;
 // player's renderers a closed set. Every audioCue has a bundled asset.
 // ---------------------------------------------------------------------------
 
-/** Bundled sound-effect cues → apps/player/public/audio/<cue>.mp3 (M2 set). */
-export const audioCue = z.enum(["thunder", "chime", "heartbeat", "rain"]);
+/**
+ * Bundled sound-effect cues → apps/player/public/audio/<cue>.mp3 (M2 set).
+ * `whispers` is special: a looping bed chained + crossfaded from the
+ * dissonant_whispers_*.mp3 clips (the player handles it, see audio.ts).
+ */
+export const audioCue = z.enum(["thunder", "chime", "heartbeat", "rain", "whispers"]);
 export type AudioCue = z.infer<typeof audioCue>;
 
 /** Named haptic patterns; the player maps each to a concrete vibration array. */
@@ -189,6 +193,7 @@ export const AUDIO_CUE_DURATION_MS: Record<AudioCue, number> = {
   chime: 4000,
   heartbeat: 4000,
   rain: 0,
+  whispers: 0, // a sustained, looping bed
 };
 
 /** How a message behaves on the player's screen (see docs/DESIGN.md). */
