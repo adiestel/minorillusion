@@ -801,15 +801,13 @@ function App() {
   // ---------------------------------------------------------------------------
 
   useEffect(() => {
-    if (loadSession() === null) return; // no stored session — nothing to restore
-
     // First user touch primes iOS audio (reconnect path has no consent tap).
     const unlockOnce = () => audio.unlock();
     document.addEventListener("pointerdown", unlockOnce, { once: true });
 
     const rejoin = () => {
       const session = loadSession();
-      if (session === null) return;
+      if (session === null) return; // not joined yet (fresh user) — nothing to do
       socket.emit(
         "circle:join",
         { code: session.code, name: session.name, deviceId },
@@ -842,10 +840,18 @@ function App() {
       );
     };
 
-    // Rejoin now if already connected, and on every (re)connect thereafter.
-    if (socket.connected) rejoin();
-    else socket.connect();
+    // ALWAYS listen for (re)connects — this is what re-binds the socket after a
+    // server restart / network blip. (The earlier bug only registered this when a
+    // session already existed at mount, so a player who joined fresh this session
+    // never re-bound on reconnect — appearing disconnected with no viewport.)
     socket.on("connect", rejoin);
+    // If we already have a session (a reload), kick a connect to restore it now;
+    // a fresh user just waits for the consent join, then reconnects via the
+    // listener above. rejoin() itself is a no-op until a session exists.
+    if (loadSession() !== null) {
+      if (socket.connected) rejoin();
+      else socket.connect();
+    }
 
     return () => {
       document.removeEventListener("pointerdown", unlockOnce);

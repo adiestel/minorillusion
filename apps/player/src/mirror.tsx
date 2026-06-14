@@ -76,6 +76,7 @@ for (const [prop, value] of Object.entries(themeVars(playerTheme))) {
 type MirrorMessage =
   | { type: "mi-scene"; scene: AmbianceScene; intensity?: number; fadeMs?: number }
   | { type: "mi-effect"; effect: DeliveredEffect }
+  | { type: "mi-ack"; effectId: string }
   | { type: "mi-clear" };
 
 interface SceneState {
@@ -128,6 +129,12 @@ function MirrorApp() {
         setFlash(null);
         setHeartbeat(null);
         setMessage(null);
+        return;
+      }
+      if (data.type === "mi-ack") {
+        // The real player dismissed this message — clear it here too (the mirror
+        // can't be tapped, so acknowledge messages would otherwise linger).
+        setMessage((cur) => (cur && cur.id === data.effectId ? null : cur));
         return;
       }
       if (data.type === "mi-effect") {

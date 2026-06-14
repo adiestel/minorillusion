@@ -401,6 +401,19 @@ function PhoneTile({
     };
   }, [player.id, post]);
 
+  // When this player dismisses (acks) a message on their real device, clear it
+  // in the mirror too — the mirror can't be tapped, so it would otherwise linger.
+  useEffect(() => {
+    function onAcked({ effectId, playerId }: { effectId: string; playerId: string }) {
+      if (playerId !== player.id) return;
+      post({ type: "mi-ack", effectId });
+    }
+    socket.on("effect:acked", onAcked);
+    return () => {
+      socket.off("effect:acked", onAcked);
+    };
+  }, [player.id, post]);
+
   return (
     <div
       onPointerDown={onPointerDown}

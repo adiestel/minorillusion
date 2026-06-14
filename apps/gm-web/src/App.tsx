@@ -125,11 +125,9 @@ export function App() {
   // presence / effects and couldn't send — re-opening re-subscribes and pulls a
   // fresh roster + active-effects snapshot.
   useEffect(() => {
-    if (loadCircleCode() === null) return;
-
     function attempt() {
       const code = loadCircleCode();
-      if (code === null) return;
+      if (code === null) return; // no circle yet — nothing to re-open
       socket.emit("circle:open", { code }, (result: OpenCircleResult) => {
         if (result.ok) {
           persistCircleCode(result.circle.code);
@@ -141,8 +139,11 @@ export function App() {
       });
     }
 
-    if (socket.connected) attempt();
+    // ALWAYS listen for (re)connects so the GM re-subscribes after a restart —
+    // even a GM that created its circle fresh this session (which had no saved
+    // code at mount and so previously registered no reconnect handler).
     socket.on("connect", attempt);
+    if (loadCircleCode() !== null && socket.connected) attempt();
     return () => { socket.off("connect", attempt); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
