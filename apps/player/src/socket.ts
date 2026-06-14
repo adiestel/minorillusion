@@ -22,9 +22,16 @@ const SERVER_URL =
  * The single shared socket for the player app.
  *
  * `autoConnect: false` so we connect only after the user initiates a join —
- * avoids opening a socket on the landing screen.
+ * avoids opening a socket on the landing screen. Reconnection is on (and
+ * unbounded) so a server restart or network blip auto-recovers; the rejoin
+ * listener in main.tsx re-binds and resyncs on each reconnect.
  */
 export const socket: Socket<ServerToClientEvents, ClientToServerEvents> = io(
   SERVER_URL,
-  { autoConnect: false },
+  {
+    autoConnect: false,
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 1000,
+  },
 );

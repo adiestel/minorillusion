@@ -473,6 +473,23 @@ function App() {
   }, []);
 
   /**
+   * Resync local state to the server's authority on (re)join: stop any ambient
+   * audio and clear the on-screen scene, dropping all sustained-effect tracking.
+   * A server restart wipes the in-memory effects registry, so without this a
+   * reconnect would leave stale beds/ambiance playing with nothing left to stop
+   * them. With it the player goes clean, and the server re-delivers whatever is
+   * truly active right after the join ack (resumeSustainedFor) — so live effects
+   * come straight back, while anything no longer active simply stays cleared.
+   * Unread messages are left intact (narrative, not ambient state).
+   */
+  const resyncLocalState = useCallback(() => {
+    audio.stopAll();
+    sustainedCleanups.current.clear();
+    ambianceEffectId.current = null;
+    setAmbiance({ scene: "clear" });
+  }, []);
+
+  /**
    * Set the persistent ambiance to a (non-clear) scene and track it as a
    * sustained effect: supersede any prior ambiance, remember this id, and
    * register a cleanup that sweeps back to clear (run by effect:end). A "clear"
@@ -820,6 +837,10 @@ function App() {
     const rejoin = () => {
       const session = loadSession();
       if (session === null) return; // not joined yet (fresh user) — nothing to do
+      // Go clean before re-binding so a reconnect (esp. after a server restart,
+      // which wipes the registry) can't leave stale ambient sound/scene stuck;
+      // the server re-delivers what's actually active right after the ack.
+      resyncLocalState();
       socket.emit(
         "circle:join",
         { code: session.code, name: session.name, deviceId },
