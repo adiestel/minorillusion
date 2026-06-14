@@ -255,8 +255,18 @@ export function classifyEffect(spec: EffectSpec): EffectClassification {
       return { register: false, sustained: false, label: "Message" };
 
     case "haptic":
-      return { register: false, sustained: false, label: "Haptic" };
+      // Haptics are near-instant, but we still surface a short (2s) panel row so
+      // the GM gets a "that fired, to these players" confirmation — the buzz/
+      // rumble itself can't be seen or heard from the console.
+      return {
+        register: true,
+        sustained: false,
+        durationMs: 2000,
+        label: spec.pattern.charAt(0).toUpperCase() + spec.pattern.slice(1),
+      };
 
+    // A bare flash isn't shown: the storm fires them every few seconds and they'd
+    // thrash the panel; the storm/Thunderclap rows already represent them.
     case "flash":
       return { register: false, sustained: false, label: "Flash" };
   }

@@ -413,8 +413,14 @@ describe("classifyEffect", () => {
     ).toBe(false);
   });
 
-  it("haptic → not registered (never shown in the panel)", () => {
-    expect(classifyEffect({ kind: "haptic", pattern: "buzz" }).register).toBe(false);
+  it("haptic → registered as a brief 2s transient with a pattern label", () => {
+    expect(classifyEffect({ kind: "haptic", pattern: "buzz" })).toEqual({
+      register: true,
+      sustained: false,
+      durationMs: 2000,
+      label: "Buzz",
+    });
+    expect(classifyEffect({ kind: "haptic", pattern: "rumble" }).label).toBe("Rumble");
   });
 
   it("flash → not registered (never shown in the panel)", () => {

@@ -180,6 +180,18 @@ try {
   await activeP;
   ok("rain cleared from effects:active");
 
+  // Haptic now shows briefly (a 2s transient) so the GM gets confirmation.
+  const buzzSend = await gm.timeout(5000).emitWithAck("effect:send", {
+    target: { kind: "broadcast" },
+    spec: { kind: "haptic", pattern: "buzz" },
+  });
+  await waitUntil(() =>
+    latestActive.some(
+      (e) => e.id === buzzSend.effectId && e.label === "Buzz" && e.sustained === false && e.durationMs === 2000,
+    ),
+  );
+  ok("haptic (buzz) shows as a brief 2s transient in effects:active");
+
   // One-shot thunderclap → transient in the registry with a countdown duration.
   activeP = waitFor(gm, "effects:active", (a) =>
     a.effects.some((e) => e.label === "Thunderclap" && e.sustained === false && e.durationMs > 0),
