@@ -659,6 +659,22 @@ function App() {
   }, []);
 
   // ---------------------------------------------------------------------------
+  // The GM removed this player: clear the session and return to the join screen
+  // (don't auto-rejoin — re-entering requires the code again).
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    function onEjected() {
+      clearSession();
+      setAppState({ screen: "join" });
+    }
+    socket.on("circle:ejected", onEjected);
+    return () => {
+      socket.off("circle:ejected", onEjected);
+    };
+  }, []);
+
+  // ---------------------------------------------------------------------------
   // Report this device's viewport (size + shape) while joined, so the GM's
   // Stage can render each tile at the device's true aspect ratio. Fires on
   // join, on resize, and on orientation change (debounced). Output-only and

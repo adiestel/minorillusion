@@ -49,6 +49,14 @@ export interface CirclesStore {
   ): Promise<PlayerRow>;
   setConnected(playerId: string, connected: boolean): Promise<void>;
   listPlayers(circleId: string): Promise<PlayerRow[]>;
+  /** Rename a player scoped to its circle; null if no such player in it. */
+  renamePlayer(input: {
+    id: string;
+    circleId: string;
+    name: string;
+  }): Promise<PlayerRow | null>;
+  /** Delete a player scoped to its circle; true if a row was removed. */
+  deletePlayer(input: { id: string; circleId: string }): Promise<boolean>;
 }
 
 // ---------------------------------------------------------------------------
@@ -158,6 +166,22 @@ export class CircleService {
   async setConnected(playerId: string, connected: boolean): Promise<void> {
     await this.store.setConnected(playerId, connected);
   }
+
+  /** Rename a player (scoped to its circle). Returns the updated player, or
+   *  null when no such player exists in that circle. */
+  async renamePlayer(
+    circleId: string,
+    playerId: string,
+    name: string,
+  ): Promise<Player | null> {
+    const row = await this.store.renamePlayer({ id: playerId, circleId, name });
+    return row ? toPlayer(row) : null;
+  }
+
+  /** Remove a player from a circle. Returns true if a row was deleted. */
+  async removePlayer(circleId: string, playerId: string): Promise<boolean> {
+    return this.store.deletePlayer({ id: playerId, circleId });
+  }
 }
 
 // JoinResult is the contract wire type; the service result is structurally
@@ -258,5 +282,26 @@ export class DrizzleCirclesStore implements CirclesStore {
       .from(players)
       .where(eq(players.circleId, circleId))
       .orderBy(players.joinedAt);
+  }
+
+  async renamePlayer(input: {
+    id: string;
+    circleId: string;
+    name: string;
+  }): Promise<PlayerRow | null> {
+    const [row] = await this.db
+      .update(players)
+      .set({ name: input.name })
+      .where(and(eq(players.id, input.id), eq(players.circleId, input.circleId)))
+      .returning();
+    return row ?? null;
+  }
+
+  async deletePlayer(input: { id: string; circleId: string }): Promise<boolean> {
+    const rows = await this.db
+      .delete(players)
+      .where(and(eq(players.id, input.id), eq(players.circleId, input.circleId)))
+      .returning({ id: players.id });
+    return rows.length > 0;
   }
 }

@@ -104,6 +104,30 @@ export const presenceUpdateSchema = z.object({
 });
 export type PresenceUpdate = z.infer<typeof presenceUpdateSchema>;
 
+// ---------------------------------------------------------------------------
+// Player management (GM) — rename or remove a player from the circle.
+// ---------------------------------------------------------------------------
+
+export const renamePlayerRequestSchema = z.object({
+  playerId: z.string().uuid(),
+  name: z.string().min(1).max(40),
+});
+export type RenamePlayerRequest = z.infer<typeof renamePlayerRequestSchema>;
+
+export const renamePlayerResultSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), player: playerSchema }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+]);
+export type RenamePlayerResult = z.infer<typeof renamePlayerResultSchema>;
+
+export const removePlayerRequestSchema = z.object({
+  playerId: z.string().uuid(),
+});
+export type RemovePlayerRequest = z.infer<typeof removePlayerRequestSchema>;
+
+export const removePlayerResultSchema = z.object({ ok: z.boolean() });
+export type RemovePlayerResult = z.infer<typeof removePlayerResultSchema>;
+
 // ===========================================================================
 // The effect engine — actor → router → target (see docs/ARCHITECTURE.md).
 //
@@ -449,6 +473,8 @@ export interface ServerToClientEvents {
   "effects:active": (active: ActiveEffects) => void;
   /** Server mirrors a delivered effect to the GM(s) for the live Stage view. */
   "effect:mirror": (info: EffectMirror) => void;
+  /** Server tells a player it was removed from the circle by the GM. */
+  "circle:ejected": (info: { reason?: string }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -478,6 +504,16 @@ export interface ClientToServerEvents {
   "effect:ack": (info: { effectId: string }) => void;
   /** Player reports its live viewport (CSS px) so the GM Stage shows true shape. */
   "player:viewport": (info: Viewport) => void;
+  /** GM renames a player. */
+  "player:rename": (
+    req: RenamePlayerRequest,
+    ack: (result: RenamePlayerResult) => void,
+  ) => void;
+  /** GM removes a player from the circle (ejects + deletes). */
+  "player:remove": (
+    req: RemovePlayerRequest,
+    ack: (result: RemovePlayerResult) => void,
+  ) => void;
   /** GM stops a sustained effect (or cancels a transient one early). */
   "effect:stop": (
     req: { effectId: string },

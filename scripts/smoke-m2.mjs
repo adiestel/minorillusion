@@ -294,6 +294,34 @@ try {
     console.log("  skip — TTS path (set SMOKE_TTS=1 to exercise the live ElevenLabs API)");
   }
 
+  // === player management: rename + remove (a throwaway player) =============
+  const p2 = conn();
+  await onConnect(p2, "player2");
+  const j2 = await p2
+    .timeout(5000)
+    .emitWithAck("circle:join", { code, name: "Temp", deviceId: "smoke-m2-dev2" });
+  const p2id = j2.ok ? j2.player.id : "";
+
+  // rename → ack carries the new name + presence reflects it.
+  const renamePresence = waitFor(gm, "presence:update", (u) =>
+    u.players.some((p) => p.id === p2id && p.name === "Renamed"),
+  );
+  const renameAck = await gm.timeout(5000).emitWithAck("player:rename", { playerId: p2id, name: "Renamed" });
+  check(renameAck.ok === true && renameAck.player.name === "Renamed", "player:rename acked with the new name");
+  await renamePresence;
+  ok("rename reflected in presence");
+
+  // remove → the player is ejected and drops out of presence.
+  const ejected = waitFor(p2, "circle:ejected");
+  const removePresence = waitFor(gm, "presence:update", (u) => !u.players.some((p) => p.id === p2id));
+  const removeAck = await gm.timeout(5000).emitWithAck("player:remove", { playerId: p2id });
+  check(removeAck.ok === true, "player:remove acked ok");
+  await ejected;
+  ok("removed player received circle:ejected");
+  await removePresence;
+  ok("removed player gone from presence");
+  p2.close();
+
   gm.close();
   player.close();
 } catch (e) {

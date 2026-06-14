@@ -27,6 +27,7 @@ import { MessageComposer } from "./MessageComposer";
 import { Soundboard } from "./Soundboard";
 import { ActiveEffects } from "./ActiveEffects";
 import { Stage } from "./Stage";
+import { PlayersPanel } from "./PlayersPanel";
 
 // ---------------------------------------------------------------------------
 // Session-restore helpers
@@ -333,7 +334,7 @@ interface CirclePanelProps {
   onLeave: () => void;
 }
 
-type Tab = "effects" | "messages";
+type Tab = "effects" | "messages" | "players";
 
 function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
   const [tab, setTab] = useState<Tab>("effects");
@@ -368,7 +369,7 @@ function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
         {/* LEFT — control tabs */}
         <div style={{ flex: "1 1 360px", minWidth: 320, maxWidth: 560, display: "flex", flexDirection: "column", gap: space(5) }}>
           <div style={{ display: "flex", gap: space(1), borderBottom: `1px solid ${palette.ash}` }}>
-            {(["effects", "messages"] as const).map((id) => (
+            {(["effects", "messages", "players"] as const).map((id) => (
               <button key={id} onClick={() => setTab(id)} style={tabButtonStyle(tab === id)}>
                 {tabLabel(id)}
               </button>
@@ -383,6 +384,8 @@ function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
           )}
 
           {tab === "messages" && <MessageComposer players={players} />}
+
+          {tab === "players" && <PlayersPanel players={players} />}
         </div>
 
         {/* RIGHT — the live Stage, sticky so it stays in view while scrolling. */}
@@ -434,6 +437,7 @@ function tabLabel(id: Tab): string {
   switch (id) {
     case "effects": return "Effects";
     case "messages": return "Messages";
+    case "players": return "Players";
   }
 }
 

@@ -4,6 +4,8 @@ import {
   createCircleRequestSchema,
   joinRequestSchema,
   openCircleRequestSchema,
+  removePlayerRequestSchema,
+  renamePlayerRequestSchema,
   sendCueRequestSchema,
   sendEffectRequestSchema,
   viewportSchema,
@@ -624,6 +626,73 @@ export function createSocketServer(
       state.viewport = parsed.data;
       // Re-broadcast so the GM Stage re-sizes this player's tile (player debounces).
       void broadcastPresence(state.circleId);
+    });
+
+    // -- player:rename (GM) -> rename a player in this circle, refresh roster. --
+    socket.on("player:rename", async (req, ack) => {
+      const parsed = renamePlayerRequestSchema.safeParse(req);
+      if (!parsed.success) {
+        ack({ ok: false, error: "Invalid rename request." });
+        return;
+      }
+      const state = bindings.get(socket.id);
+      if (!state || state.playerId !== undefined) {
+        ack({ ok: false, error: "Only a GM may rename players." });
+        return;
+      }
+      try {
+        const player = await service.renamePlayer(
+          state.circleId,
+          parsed.data.playerId,
+          parsed.data.name,
+        );
+        if (!player) {
+          ack({ ok: false, error: "Player not found." });
+          return;
+        }
+        await broadcastPresence(state.circleId);
+        ack({ ok: true, player });
+      } catch (err) {
+        app.log.error({ err }, "player:rename failed");
+        ack({ ok: false, error: "Failed to rename player." });
+      }
+    });
+
+    // -- player:remove (GM) -> eject + delete a player from this circle. -------
+    socket.on("player:remove", async (req, ack) => {
+      const parsed = removePlayerRequestSchema.safeParse(req);
+      if (!parsed.success) {
+        ack({ ok: false });
+        return;
+      }
+      const state = bindings.get(socket.id);
+      if (!state || state.playerId !== undefined) {
+        ack({ ok: false });
+        return;
+      }
+      try {
+        const removed = await service.removePlayer(
+          state.circleId,
+          parsed.data.playerId,
+        );
+        if (!removed) {
+          ack({ ok: false });
+          return;
+        }
+        // If the player is currently connected, tell their client it was removed
+        // (so it clears its session + returns to the join screen) and drop it.
+        const present = presentPlayerSockets(state.circleId);
+        const target = present.get(parsed.data.playerId);
+        if (target) {
+          target.emit("circle:ejected", { reason: "Removed by the GM." });
+          target.disconnect(true);
+        }
+        await broadcastPresence(state.circleId);
+        ack({ ok: true });
+      } catch (err) {
+        app.log.error({ err }, "player:remove failed");
+        ack({ ok: false });
+      }
     });
 
     // -- effect:stop (GM) -> end a sustained effect (or cancel a transient). ---

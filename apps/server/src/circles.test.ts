@@ -105,6 +105,28 @@ class FakeCirclesStore implements CirclesStore {
   async listPlayers(circleId: string): Promise<PlayerRow[]> {
     return this.players.filter((p) => p.circleId === circleId);
   }
+
+  async renamePlayer(input: {
+    id: string;
+    circleId: string;
+    name: string;
+  }): Promise<PlayerRow | null> {
+    const row = this.players.find(
+      (p) => p.id === input.id && p.circleId === input.circleId,
+    );
+    if (!row) return null;
+    row.name = input.name;
+    return row;
+  }
+
+  async deletePlayer(input: { id: string; circleId: string }): Promise<boolean> {
+    const i = this.players.findIndex(
+      (p) => p.id === input.id && p.circleId === input.circleId,
+    );
+    if (i === -1) return false;
+    this.players.splice(i, 1);
+    return true;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -331,5 +353,40 @@ describe("CircleService", () => {
     await service.setConnected(playerId, false);
     const presence = await service.presence(circle.id);
     expect(presence[0]?.connected).toBe(false);
+  });
+
+  it("renamePlayer updates the name (scoped to the circle)", async () => {
+    const store = new FakeCirclesStore();
+    const service = new CircleService(store);
+    const circle = await service.createCircle();
+    const joined = await service.joinCircle({ code: circle.code, name: "Vex", deviceId: "device-a" });
+    const playerId = joined.ok ? joined.player.id : "";
+
+    const renamed = await service.renamePlayer(circle.id, playerId, "Vexwhistle");
+    expect(renamed?.name).toBe("Vexwhistle");
+    const presence = await service.presence(circle.id);
+    expect(presence[0]?.name).toBe("Vexwhistle");
+
+    // A player id from another circle isn't renamed (scoping).
+    const other = await service.createCircle();
+    const miss = await service.renamePlayer(other.id, playerId, "Nope");
+    expect(miss).toBeNull();
+  });
+
+  it("removePlayer deletes the player (scoped to the circle)", async () => {
+    const store = new FakeCirclesStore();
+    const service = new CircleService(store);
+    const circle = await service.createCircle();
+    const joined = await service.joinCircle({ code: circle.code, name: "Vex", deviceId: "device-a" });
+    const playerId = joined.ok ? joined.player.id : "";
+
+    // Wrong circle → no-op.
+    const other = await service.createCircle();
+    expect(await service.removePlayer(other.id, playerId)).toBe(false);
+    expect(await service.presence(circle.id)).toHaveLength(1);
+
+    // Correct circle → removed.
+    expect(await service.removePlayer(circle.id, playerId)).toBe(true);
+    expect(await service.presence(circle.id)).toHaveLength(0);
   });
 });
