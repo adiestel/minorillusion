@@ -45,7 +45,18 @@ Tap the black screen → two sigils bloom from the touch point: the **quill** (t
 - **PTT feedback:** while holding, the rest of the screen blurs, glows, and thrums with the voice.
 
 ## Effect vocabulary (examples; the engine is general)
-- **Atmospheric / broadcast:** thunderstorm (staggered lightning across phones), heartbeat (synced haptic + red breath), darkness+silence (then one torch as the party's only light), surround soundscape (phones as a distributed speaker array), spatial whispers (voice hops device-to-device), tremor.
+The engine is one mechanism (actor → router → target). An **EffectSpec** + a **Target** [+ a `startDelayMs`] is fired with `effect:send`; a choreographed **cue** (`effect:cue`) is a bundle of specs at one target, each with its own offset, scheduled locally by each device so a moment lands in time across the set. New effects are new spec kinds, not new plumbing.
+
+**Implemented (M2 — the cheap-path core):**
+- **message** — the parchment (M1).
+- **audio** — a bundled SFX cue (`thunder`/`chime`/`heartbeat`/`rain`) or **TTS** (text → inline `data:` audio via the ElevenLabs adapter). Unlocked on the consent/join tap.
+- **haptic** — named patterns (`buzz`/`double`/`rumble`/`heartbeat`/`success`); web `navigator.vibrate` + a `@capacitor/haptics` native seam.
+- **ambiance** — a persistent scene: `clear` (resting ember), **`storm`** (cold vignette + photosensitivity-safe JS-timed lightning + faint rain streaks + a rain audio bed — cheap CSS, not video), `ember` (stirred warm glow).
+- **heartbeat** — a red edge-vignette pulse + haptic train, `bpm`×`beats`.
+- The **GM soundboard** fires these one-tap (Thunderclap, Storm cue, Calm, Stir embers, Heartbeat, Buzz/Rumble, Speak). **Consent-at-join** discloses what the GM can do (sound/vibration/screen) and that mic/camera are never silent.
+
+**Still aspirational (later milestones), all the same engine:**
+- **Atmospheric / broadcast:** staggered lightning across phones, darkness+silence (then one torch as the party's only light), surround soundscape (phones as a distributed speaker array), spatial whispers (voice hops device-to-device), tremor.
 - **Personal / targeted:** the secret note (one player only), affliction (that player's screen subtly corrupts), scrying (a private vision).
 - **Hardware-as-mechanic:** steady-hand (hold the phone still via gyro), diviner's compass (sweep the room via gyro), the doom clock (shared countdown).
 

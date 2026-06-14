@@ -24,6 +24,7 @@ import type {
 import { gmTheme, palette, radius, space, themeVars } from "@minorillusion/design-system";
 import { socket } from "./socket";
 import { MessageComposer } from "./MessageComposer";
+import { Soundboard } from "./Soundboard";
 
 // ---------------------------------------------------------------------------
 // Session-restore helpers
@@ -388,6 +389,11 @@ function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
 
       {/* M1 — message composer */}
       <MessageComposer players={players} />
+
+      <Divider />
+
+      {/* M2 — soundboard: one-tap atmosphere triggers */}
+      <Soundboard players={players} />
 
       <Divider />
 

@@ -1,3 +1,6 @@
+// Load .env.local / .env into process.env FIRST, before any module reads config
+// (db/client.ts reads DATABASE_URL at import time; tts.ts reads ELEVENLABS_API_KEY).
+import "./env.js";
 import cors from "@fastify/cors";
 import Fastify from "fastify";
 import { DEFAULT_SERVER_PORT } from "@minorillusion/contract";

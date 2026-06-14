@@ -7,8 +7,8 @@ import { useState } from "react";
 import type {
   MessageMode,
   Player,
+  SendEffectRequest,
   SendEffectResult,
-  SendMessageRequest,
   Target,
 } from "@minorillusion/contract";
 import { palette, radius, space } from "@minorillusion/design-system";
@@ -102,11 +102,14 @@ export function MessageComposer({ players }: MessageComposerProps) {
         ? { kind: "broadcast" }
         : { kind: "players", playerIds: Array.from(selectedIds) };
 
-    const req: SendMessageRequest = {
+    const req: SendEffectRequest = {
       target,
-      body: body.trim(),
-      mode,
-      ...(mode === "auto_dismiss" ? { autoDismissMs: autoDismissSecs * 1000 } : {}),
+      spec: {
+        kind: "message",
+        body: body.trim(),
+        mode,
+        ...(mode === "auto_dismiss" ? { autoDismissMs: autoDismissSecs * 1000 } : {}),
+      },
     };
 
     socket.emit("effect:send", req, (result: SendEffectResult) => {
@@ -115,8 +118,8 @@ export function MessageComposer({ players }: MessageComposerProps) {
         setLog((prev) => [
           {
             effectId: result.effectId,
-            body: req.body,
-            mode: req.mode,
+            body: req.spec.kind === "message" ? req.spec.body : "",
+            mode,
             target: req.target,
             deliveredTo: result.deliveredTo,
             sentAt: Date.now(),

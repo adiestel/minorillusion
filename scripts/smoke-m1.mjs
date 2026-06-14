@@ -56,8 +56,7 @@ try {
   const gotDeliver = waitFor(player, "effect:deliver", (e) => e.kind === "message");
   const send1 = await gm.timeout(5000).emitWithAck("effect:send", {
     target: { kind: "broadcast" },
-    body: "The torches gutter.",
-    mode: "acknowledge",
+    spec: { kind: "message", body: "The torches gutter.", mode: "acknowledge" },
   });
   check(send1.ok === true && send1.deliveredTo >= 1, "broadcast effect:send acked (deliveredTo >= 1)");
   const eff = await gotDeliver;
@@ -76,8 +75,7 @@ try {
   const gotTargeted = waitFor(player, "effect:deliver", (e) => e.body === "A whisper, for you alone.");
   const send2 = await gm.timeout(5000).emitWithAck("effect:send", {
     target: { kind: "players", playerIds: [playerId] },
-    body: "A whisper, for you alone.",
-    mode: "silent",
+    spec: { kind: "message", body: "A whisper, for you alone.", mode: "silent" },
   });
   check(send2.ok === true && send2.deliveredTo === 1, "targeted effect:send delivered to exactly 1");
   const eff2 = await gotTargeted;

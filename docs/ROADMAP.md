@@ -4,9 +4,11 @@
 Sequenced to de-risk: a thin slice runs end-to-end early (tracer bullet), the cheap-path "wow" lands before the GPU complexity, native/device testing starts as soon as a native capability appears, and the hardest external dependencies come last. **Claude implements, user reviews — working code, milestone by milestone.**
 
 ## Current status
-**M1 complete.** ✓ The full actor→router→target effect pipeline works: the GM sends a parchment message (acknowledge / auto_dismiss / silent) to a target or broadcast; the player renders it as ink-on-parchment (burn-to-ash acknowledge, refold auto-dismiss, silent ember-glow) and acks back to the GM. 30 unit tests pass (contract 7, server 23); `scripts/smoke-m1.mjs` + `smoke-m0.mjs` pass end-to-end. **Post-M1 design-review polish (done):** parchment rebuilt as clean **DOM/CSS** — IM Fell English, a torn/deckled edge (SVG displacement filter), restrained fade-and-rise + ink fade-in (the 3D attempt was tried and reverted — see DECISIONS D13); the **skeuomorphic rule** enforced (the joined/resting state is now just the breathing ember — no name/roster text); and **session reconnect** added (player auto-rejoin + GM circle restore + a Leave control).
+**M2 complete.** ✓ The single `message` effect is now a full **effect engine**: the contract carries an `EffectSpec` union (`message | audio | haptic | ambiance | heartbeat`); the server router stamps each into a `DeliveredEffect` (resolving TTS to inline `data:` audio) and routes it; effects carry `startDelayMs` and `effect:cue` fires choreographed bundles across the device set. Cheap-path renderers ship for all of them — bundled mp3 SFX + an audio seam unlocked on join, native+web **haptics**, a persistent **AmbianceLayer** (clear / storm = CSS lightning+vignette+rain bed / stirred ember), a **heartbeat** pulse, and **TTS** via an ElevenLabs adapter. The GM has a **soundboard** of one-tap effects + cue presets + a Speak box. **Consent-at-join** is enforced (discloses sound/vibration/screen, mic/camera never silent; the accept tap unlocks audio). 49 unit tests pass (contract 16, server 33); `smoke-m2.mjs` drives the whole pipeline (audio/haptic/ambiance/heartbeat + the 3-step storm cue with per-step delays + targeting); `smoke-m0/m1` still green. See DECISIONS **D14**. (Storm is the cheap CSS path, not Veo video — D14. Fixed in passing: theme vars now on `:root` so the UI isn't serif.)
 
-**Next action: M2 — effect engine + cheap-path core effects (audio/TTS, haptics, ember, storm-via-video, heartbeat) + GM soundboard. ← native capabilities + physical-device testing begin here.**
+**Next action: M3 — player voice/text plane (tap → quill/ball; quill text → GM; ball PTT → record → STT → GM; channels; GM replies with any effect).**
+
+**Needs the user (physical-device pass):** haptic feel + iOS audio unlock can't be validated in a browser — run the player on a real iPhone/Android to confirm. The web/PWA path is verified.
 
 ## Milestones
 
@@ -18,9 +20,8 @@ Monorepo, `contract` + `design-system`, the three app shells (Capacitor included
 The GM pushes a **parchment message** to a target or broadcast, with **acknowledge / auto-dismiss / silent**.
 **Proves:** the entire actor→router→target pipeline + the design language + the message-type system, in one minimal slice.
 
-### M2 — Effect engine + cheap-path core
-Generalized effect definitions + the choreography timeline across the device set. Core effects via the cheap path: audio/TTS (with audio-unlock-on-join), **haptics**, the breathing ember, storm-via-pre-rendered-video, heartbeat. The GM "soundboard." Consent-at-join + overt-output rules enforced.
-**← Native capabilities and physical-device testing begin in earnest here** (haptics/audio can't be validated in a browser).
+### M2 — Effect engine + cheap-path core — ✓ DONE
+Generalized effect definitions (`EffectSpec`/`DeliveredEffect` unions) + the choreography timeline (`startDelayMs` + `effect:cue`) across the device set. Core effects via the cheap path: audio/TTS (audio-unlock-on-join; SFX as bundled mp3 cues, TTS as inline `data:` audio via an ElevenLabs adapter), **haptics** (web + `@capacitor/haptics` native seam), the breathing ember, **storm as cheap CSS** (lightning+vignette+rain bed — not Veo video; see D14), heartbeat. The GM **soundboard**. **Consent-at-join + overt-output rules enforced.** Native capability seam wired (haptics native impl, audio unlock); on-device haptic/audio *feel* is a user verification step.
 
 ### M3 — Player voice/text plane
 Tap → quill/ball. Quill text → GM. Ball PTT → record → STT → GM. Channels (DM-only first; multi-contact + agents later). GM can reply with any effect (closes the loop).

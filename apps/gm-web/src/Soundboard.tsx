@@ -1,0 +1,427 @@
+/**
+ * Soundboard — M2 GM atmosphere panel.
+ * One-tap effect triggers (audio cues, ambiance, haptics, heartbeat) plus a
+ * choreographed "Storm" cue and a TTS "Speak" row. Fires `effect:send` (and
+ * `effect:cue` for Storm) and surfaces a brief transient status from the ack.
+ *
+ * Sits below the MessageComposer inside the active-circle view. Carries its
+ * own small target selector (Everyone vs specific connected players), mirroring
+ * MessageComposer's UX without sharing its internals.
+ */
+import { useEffect, useRef, useState } from "react";
+import type {
+  EffectSpec,
+  Player,
+  SendCueRequest,
+  SendCueResult,
+  SendEffectRequest,
+  SendEffectResult,
+  Target,
+} from "@minorillusion/contract";
+import { palette, radius, space } from "@minorillusion/design-system";
+import { socket } from "./socket";
+
+// ---------------------------------------------------------------------------
+// One-tap button definitions
+// ---------------------------------------------------------------------------
+
+/** A single-effect button (fires `effect:send`). */
+interface EffectButton {
+  id: string;
+  label: string;
+  spec: EffectSpec;
+}
+
+/** Buttons that fire one effect via `effect:send`. */
+const EFFECT_BUTTONS: EffectButton[] = [
+  { id: "thunderclap", label: "Thunderclap", spec: { kind: "audio", source: { via: "cue", cue: "thunder" } } },
+  { id: "chime", label: "Chime", spec: { kind: "audio", source: { via: "cue", cue: "chime" } } },
+  { id: "calm", label: "Calm", spec: { kind: "ambiance", scene: "clear" } },
+  { id: "embers", label: "Stir embers", spec: { kind: "ambiance", scene: "ember" } },
+  { id: "heartbeat", label: "Heartbeat", spec: { kind: "heartbeat", bpm: 72, beats: 8 } },
+  { id: "buzz", label: "Buzz", spec: { kind: "haptic", pattern: "buzz" } },
+  { id: "rumble", label: "Rumble", spec: { kind: "haptic", pattern: "rumble" } },
+];
+
+/** The choreographed Storm cue (fires `effect:cue`). */
+const STORM_STEPS: SendCueRequest["steps"] = [
+  { spec: { kind: "ambiance", scene: "storm" } },
+  { spec: { kind: "audio", source: { via: "cue", cue: "thunder" } }, startDelayMs: 300 },
+  { spec: { kind: "haptic", pattern: "rumble" }, startDelayMs: 300 },
+];
+
+// ---------------------------------------------------------------------------
+// Transient status
+// ---------------------------------------------------------------------------
+
+type Status = { kind: "ok" | "error"; text: string } | null;
+
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
+
+interface SoundboardProps {
+  players: Player[];
+}
+
+export function Soundboard({ players }: SoundboardProps) {
+  // --- Target selector state (mirrors MessageComposer) ---
+  const [targetMode, setTargetMode] = useState<"broadcast" | "players">("broadcast");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // --- TTS row ---
+  const [ttsText, setTtsText] = useState("");
+
+  // --- Transient status ---
+  const [status, setStatus] = useState<Status>(null);
+  const statusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // --- In-flight tracking (disable a button briefly while its emit lands) ---
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (statusTimer.current !== null) clearTimeout(statusTimer.current);
+    };
+  }, []);
+
+  // --- Derived ---
+  const connectedPlayers = players.filter((p) => p.connected);
+  const targetReady = targetMode === "broadcast" || selectedIds.size > 0;
+
+  // --- Helpers ---
+  function togglePlayer(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function buildTarget(): Target {
+    return targetMode === "broadcast"
+      ? { kind: "broadcast" }
+      : { kind: "players", playerIds: Array.from(selectedIds) };
+  }
+
+  function showStatus(next: Status) {
+    if (statusTimer.current !== null) clearTimeout(statusTimer.current);
+    setStatus(next);
+    if (next !== null) {
+      statusTimer.current = setTimeout(() => setStatus(null), 4000);
+    }
+  }
+
+  /** Fire a single effect; `id`/`label` drive busy-state + status text. */
+  function fireEffect(id: string, label: string, spec: EffectSpec) {
+    if (!targetReady) return;
+    setBusyId(id);
+    const req: SendEffectRequest = { target: buildTarget(), spec };
+    socket.emit("effect:send", req, (result: SendEffectResult) => {
+      setBusyId((cur) => (cur === id ? null : cur));
+      if (result.ok) {
+        showStatus({ kind: "ok", text: `${label} → ${result.deliveredTo} ${plural(result.deliveredTo)}` });
+      } else {
+        showStatus({ kind: "error", text: `${label}: ${result.error}` });
+      }
+    });
+  }
+
+  /** Fire the choreographed Storm cue. */
+  function fireStorm() {
+    if (!targetReady) return;
+    setBusyId("storm");
+    const req: SendCueRequest = { target: buildTarget(), steps: STORM_STEPS };
+    socket.emit("effect:cue", req, (result: SendCueResult) => {
+      setBusyId((cur) => (cur === "storm" ? null : cur));
+      if (result.ok) {
+        showStatus({ kind: "ok", text: `Storm → ${result.deliveredTo} ${plural(result.deliveredTo)}` });
+      } else {
+        showStatus({ kind: "error", text: `Storm: ${result.error}` });
+      }
+    });
+  }
+
+  /** Fire TTS via the audio effect (server resolves it through ElevenLabs). */
+  function fireSpeak() {
+    const text = ttsText.trim();
+    if (text.length === 0 || !targetReady) return;
+    setBusyId("tts");
+    const req: SendEffectRequest = {
+      target: buildTarget(),
+      spec: { kind: "audio", source: { via: "tts", text } },
+    };
+    socket.emit("effect:send", req, (result: SendEffectResult) => {
+      setBusyId((cur) => (cur === "tts" ? null : cur));
+      if (result.ok) {
+        showStatus({ kind: "ok", text: `Speak → ${result.deliveredTo} ${plural(result.deliveredTo)}` });
+        setTtsText("");
+      } else {
+        // Surface the adapter error inline (e.g. no ElevenLabs key configured).
+        showStatus({ kind: "error", text: `Speak: ${result.error}` });
+      }
+    });
+  }
+
+  // --- Render ---
+  return (
+    <section style={cardStyle}>
+      <h2 style={sectionHeadingStyle}>Soundboard</h2>
+
+      {/* Target selector — same UX as the composer */}
+      <div style={{ display: "flex", flexDirection: "column", gap: space(2) }}>
+        <label style={labelStyle}>Target</label>
+        <div style={{ display: "flex", gap: space(3) }}>
+          <ToggleButton active={targetMode === "broadcast"} onClick={() => setTargetMode("broadcast")}>
+            Everyone
+          </ToggleButton>
+          <ToggleButton active={targetMode === "players"} onClick={() => setTargetMode("players")}>
+            Specific players
+          </ToggleButton>
+        </div>
+
+        {targetMode === "players" && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: space(2), marginTop: space(1) }}>
+            {connectedPlayers.length === 0 ? (
+              <span style={{ fontSize: "0.85rem", color: "var(--text-dim)" }}>
+                No connected players.
+              </span>
+            ) : (
+              connectedPlayers.map((p) => (
+                <PlayerChip
+                  key={p.id}
+                  player={p}
+                  selected={selectedIds.has(p.id)}
+                  onClick={() => togglePlayer(p.id)}
+                />
+              ))
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* One-tap effect grid */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
+          gap: space(2),
+          marginTop: space(4),
+        }}
+      >
+        {/* Storm gets its own button up top — it's the marquee cue. */}
+        <SoundButton
+          label="Storm"
+          onClick={fireStorm}
+          disabled={!targetReady || busyId === "storm"}
+        />
+        {EFFECT_BUTTONS.map((b) => (
+          <SoundButton
+            key={b.id}
+            label={b.label}
+            onClick={() => fireEffect(b.id, b.label, b.spec)}
+            disabled={!targetReady || busyId === b.id}
+          />
+        ))}
+      </div>
+
+      {/* TTS "Speak" row */}
+      <div style={{ display: "flex", flexDirection: "column", gap: space(2), marginTop: space(5) }}>
+        <label style={labelStyle}>Speak (text-to-speech)</label>
+        <div style={{ display: "flex", gap: space(2), alignItems: "stretch" }}>
+          <input
+            type="text"
+            placeholder="Say something aloud…"
+            value={ttsText}
+            maxLength={600}
+            onChange={(e) => setTtsText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") fireSpeak();
+            }}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              background: "var(--bg)",
+              color: "var(--text)",
+              border: `1px solid ${palette.ash}`,
+              borderRadius: radius.md,
+              padding: `${space(3)} ${space(4)}`,
+              fontSize: "0.95rem",
+              outline: "none",
+              fontFamily: "var(--font)",
+              caretColor: palette.ember,
+            }}
+          />
+          <button
+            onClick={fireSpeak}
+            disabled={ttsText.trim().length === 0 || !targetReady || busyId === "tts"}
+            style={sendButtonStyle(ttsText.trim().length === 0 || !targetReady || busyId === "tts")}
+          >
+            {busyId === "tts" ? "Speaking…" : "Speak"}
+          </button>
+        </div>
+      </div>
+
+      {/* Transient status line */}
+      {status && (
+        <p
+          style={{
+            margin: `${space(4)} 0 0`,
+            fontSize: "0.85rem",
+            color: status.kind === "error" ? palette.ember : "var(--text-dim)",
+          }}
+        >
+          {status.text}
+        </p>
+      )}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SoundButton — one-tap atmosphere trigger
+// ---------------------------------------------------------------------------
+
+interface SoundButtonProps {
+  label: string;
+  onClick: () => void;
+  disabled: boolean;
+}
+
+function SoundButton({ label, onClick, disabled }: SoundButtonProps) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        padding: `${space(3)} ${space(3)}`,
+        background: disabled ? palette.ash : "var(--surface)",
+        color: disabled ? palette.parchmentDim : palette.ember,
+        border: `1px solid ${disabled ? palette.ash : palette.emberDim}`,
+        borderRadius: radius.md,
+        fontSize: "0.9rem",
+        fontWeight: 600,
+        cursor: disabled ? "not-allowed" : "pointer",
+        transition: "background 0.15s, color 0.15s, border-color 0.15s",
+        textAlign: "center",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// PlayerChip (local copy — matches MessageComposer's chip)
+// ---------------------------------------------------------------------------
+
+interface PlayerChipProps {
+  player: Player;
+  selected: boolean;
+  onClick: () => void;
+}
+
+function PlayerChip({ player, selected, onClick }: PlayerChipProps) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: `${space(2)} ${space(3)}`,
+        background: selected ? palette.emberDim : "var(--surface)",
+        color: selected ? palette.ember : "var(--text-dim)",
+        border: `1px solid ${selected ? palette.ember : palette.ash}`,
+        borderRadius: radius.pill,
+        fontSize: "0.85rem",
+        fontWeight: selected ? 700 : 400,
+        cursor: "pointer",
+        transition: "background 0.15s, color 0.15s, border-color 0.15s",
+      }}
+    >
+      {player.name}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ToggleButton (local copy — matches MessageComposer's toggle)
+// ---------------------------------------------------------------------------
+
+interface ToggleButtonProps {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}
+
+function ToggleButton({ active, onClick, children }: ToggleButtonProps) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: `${space(2)} ${space(4)}`,
+        background: active ? palette.emberDim : "var(--surface)",
+        color: active ? palette.ember : "var(--text-dim)",
+        border: `1px solid ${active ? palette.ember : palette.ash}`,
+        borderRadius: radius.md,
+        fontSize: "0.85rem",
+        fontWeight: active ? 700 : 400,
+        cursor: "pointer",
+        transition: "background 0.15s, color 0.15s, border-color 0.15s",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tiny helpers
+// ---------------------------------------------------------------------------
+
+function plural(n: number): string {
+  return n === 1 ? "player" : "players";
+}
+
+// ---------------------------------------------------------------------------
+// Style constants (match MessageComposer's card look)
+// ---------------------------------------------------------------------------
+
+const cardStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  padding: `${space(5)} ${space(5)}`,
+  background: "var(--surface)",
+  borderRadius: radius.md,
+};
+
+const sectionHeadingStyle: React.CSSProperties = {
+  margin: `0 0 ${space(4)}`,
+  fontSize: "0.78rem",
+  fontWeight: 700,
+  letterSpacing: "0.12em",
+  textTransform: "uppercase",
+  color: palette.parchmentDim,
+};
+
+const labelStyle: React.CSSProperties = {
+  fontSize: "0.78rem",
+  fontWeight: 600,
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+  color: "var(--text-dim)",
+};
+
+function sendButtonStyle(disabled: boolean): React.CSSProperties {
+  return {
+    padding: `${space(3)} ${space(5)}`,
+    background: disabled ? palette.ash : palette.ember,
+    color: disabled ? palette.parchmentDim : palette.nearBlack,
+    border: "none",
+    borderRadius: radius.md,
+    fontWeight: 700,
+    fontSize: "0.95rem",
+    cursor: disabled ? "not-allowed" : "pointer",
+    transition: "background 0.15s",
+    whiteSpace: "nowrap",
+  };
+}

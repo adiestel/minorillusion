@@ -4,12 +4,13 @@ import {
   createCircleRequestSchema,
   joinRequestSchema,
   openCircleRequestSchema,
-  sendMessageRequestSchema,
+  sendCueRequestSchema,
+  sendEffectRequestSchema,
   type ClientToServerEvents,
   type ServerToClientEvents,
 } from "@minorillusion/contract";
 import { CircleService } from "./circles.js";
-import { buildMessageEffect, resolveTargets } from "./effects.js";
+import { buildCue, buildEffect, resolveTargets } from "./effects.js";
 
 /**
  * Typed Socket.IO server for the M0 realtime core. Rooms map 1:1 to circle ids;
@@ -135,11 +136,11 @@ export function createSocketServer(
       }
     });
 
-    // -- effect:send (GM) -> route a parchment message to its target(s). ------
-    socket.on("effect:send", (req, ack) => {
-      const parsed = sendMessageRequestSchema.safeParse(req);
+    // -- effect:send (GM) -> route one effect (any kind) to its target(s). ----
+    socket.on("effect:send", async (req, ack) => {
+      const parsed = sendEffectRequestSchema.safeParse(req);
       if (!parsed.success) {
-        ack({ ok: false, error: "Invalid message request." });
+        ack({ ok: false, error: "Invalid effect request." });
         return;
       }
       // Only a GM may send effects: bound to a circle, but not a player.
@@ -149,7 +150,21 @@ export function createSocketServer(
         return;
       }
 
-      const effect = buildMessageEffect(parsed.data);
+      // Minting may synthesize TTS (network), so it can throw — surface it as a
+      // failed ack rather than crashing the connection.
+      let effect;
+      try {
+        effect = await buildEffect(parsed.data.spec, {
+          startDelayMs: parsed.data.startDelayMs,
+        });
+      } catch (err) {
+        ack({
+          ok: false,
+          error: err instanceof Error ? err.message : "Failed to build effect.",
+        });
+        return;
+      }
+
       const present = presentPlayerSockets(state.circleId);
       const recipientIds = resolveTargets(parsed.data.target, [
         ...present.keys(),
@@ -166,6 +181,57 @@ export function createSocketServer(
       // Remember who sent this effect so a later ack can be routed home.
       effectSenders.set(effect.id, socket.id);
       ack({ ok: true, effectId: effect.id, deliveredTo });
+    });
+
+    // -- effect:cue (GM) -> route a choreographed bundle to one target set. ----
+    socket.on("effect:cue", async (req, ack) => {
+      const parsed = sendCueRequestSchema.safeParse(req);
+      if (!parsed.success) {
+        ack({ ok: false, error: "Invalid cue request." });
+        return;
+      }
+      // Only a GM may send effects: bound to a circle, but not a player.
+      const state = bindings.get(socket.id);
+      if (!state || state.playerId !== undefined) {
+        ack({ ok: false, error: "Only a GM in a circle may send effects." });
+        return;
+      }
+
+      // Mint every step up front (any may synthesize TTS, so it can throw).
+      let effects;
+      try {
+        effects = await buildCue(parsed.data.steps);
+      } catch (err) {
+        ack({
+          ok: false,
+          error: err instanceof Error ? err.message : "Failed to build cue.",
+        });
+        return;
+      }
+
+      // Resolve the recipient set once, then fan every step out to each of them
+      // so the whole cue lands on the same devices (each step keeps its delay).
+      const present = presentPlayerSockets(state.circleId);
+      const recipientIds = resolveTargets(parsed.data.target, [
+        ...present.keys(),
+      ]);
+      const recipients = recipientIds
+        .map((playerId) => present.get(playerId))
+        .filter((s): s is AppSocket => s !== undefined);
+
+      for (const effect of effects) {
+        for (const playerSocket of recipients) {
+          playerSocket.emit("effect:deliver", effect);
+        }
+        // Each effect can be acknowledged independently; route every ack home.
+        effectSenders.set(effect.id, socket.id);
+      }
+
+      ack({
+        ok: true,
+        effectIds: effects.map((e) => e.id),
+        deliveredTo: recipients.length,
+      });
     });
 
     // -- effect:ack (player) -> notify the originating GM of the ack. ---------

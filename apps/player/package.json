@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@capacitor/core": "^6.2.0",
+    "@capacitor/haptics": "^6.0.0",
     "@minorillusion/contract": "workspace:*",
     "@minorillusion/design-system": "workspace:*",
     "@react-three/drei": "^9.120.4",
