@@ -64,6 +64,11 @@ interface AudioCapability {
   play(source: PlaySource, opts?: PlayOptions): AudioHandle;
   /** Stop + clean up every currently-tracked sound (loops fade out). */
   stopAll(): void;
+  /** True when audio is blocked by a suspended context (a gesture is needed). */
+  locked(): boolean;
+  /** Subscribe to lock-state changes; fires immediately with the current state.
+   *  Returns an unsubscribe. */
+  onLockChange(cb: (locked: boolean) => void): () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +299,30 @@ class WebAudio implements AudioCapability {
       }
     }
     this.activeEls.clear();
+  }
+
+  /**
+   * Is audio currently blocked? True only when a real AudioContext exists and is
+   * suspended (autoplay policy / the browser idled it / returned from background)
+   * — i.e. a user gesture is needed before sound will play. With no Web Audio
+   * (the HTMLAudioElement fallback) we can't reliably detect this, so report
+   * false rather than nag with a modal that can't be satisfied.
+   */
+  locked(): boolean {
+    const ctx = this.ensureCtx();
+    return ctx !== null && ctx.state === "suspended";
+  }
+
+  onLockChange(cb: (locked: boolean) => void): () => void {
+    const ctx = this.ensureCtx();
+    if (ctx === null) {
+      cb(false);
+      return () => {};
+    }
+    const handler = () => cb(ctx.state === "suspended");
+    ctx.addEventListener("statechange", handler);
+    handler(); // fire immediately with the current state
+    return () => ctx.removeEventListener("statechange", handler);
   }
 }
 

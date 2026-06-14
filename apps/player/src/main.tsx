@@ -35,6 +35,7 @@ import { AmbianceLayer } from "./AmbianceLayer";
 import { Heartbeat } from "./Heartbeat";
 import { Flash } from "./Flash";
 import { Consent } from "./Consent";
+import { AudioUnlockModal } from "./AudioUnlockModal";
 
 import { socket } from "./socket";
 import { deviceId } from "./deviceId";
@@ -402,6 +403,8 @@ function App() {
   const [joinError, setJoinError] = useState<string | null>(null);
   // True while a post-consent join round-trips.
   const [joining, setJoining] = useState(false);
+  // True while joined AND the audio context is suspended (needs a tap to wake).
+  const [audioLocked, setAudioLocked] = useState(false);
 
   // ---------------------------------------------------------------------------
   // Effect dispatcher — effect:deliver routed by effect.kind.
@@ -659,6 +662,20 @@ function App() {
   }, []);
 
   // ---------------------------------------------------------------------------
+  // Watch the audio lock-state while joined, so we can prompt for a tap only
+  // when sound is actually blocked (a suspended context — autoplay policy, the
+  // browser idling it, or returning from the background). Clear when not joined.
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    if (appState.screen !== "joined") {
+      setAudioLocked(false);
+      return;
+    }
+    return audio.onLockChange(setAudioLocked);
+  }, [appState.screen]);
+
+  // ---------------------------------------------------------------------------
   // The GM removed this player: clear the session and return to the join screen
   // (don't auto-rejoin — re-entering requires the code again).
   // ---------------------------------------------------------------------------
@@ -878,6 +895,10 @@ function App() {
           onDone={handleMessageDone}
         />
       )}
+
+      {/* Audio-unlock prompt — only while joined AND the context is suspended.
+          Sits above all else (z 100); a tap wakes the sound and clears it. */}
+      {audioLocked && <AudioUnlockModal />}
     </>
   );
 }

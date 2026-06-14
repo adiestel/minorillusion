@@ -19,6 +19,7 @@ import { AmbianceLayer } from "./AmbianceLayer";
 import { Heartbeat } from "./Heartbeat";
 import { Flash } from "./Flash";
 import { Consent } from "./Consent";
+import { AudioUnlockModal } from "./AudioUnlockModal";
 import { audio } from "./capabilities/index";
 
 // In the offscreen screenshot harness, neutralise audio: a real <audio> media
@@ -72,6 +73,14 @@ function View() {
   switch (view) {
     case "consent":
       return <Consent onAccept={() => {}} onDecline={() => {}} />;
+    case "audiolock":
+      // The "tap to enable sound" prompt over the resting ember.
+      return (
+        <>
+          <div className="mi-preview-ember" />
+          <AudioUnlockModal />
+        </>
+      );
     case "flash":
       // Flash over a STATIC storm-ish backdrop (no infinite rain animation, so
       // headless --virtual-time-budget settles reliably). Pair with &flash=1.
