@@ -29,6 +29,7 @@ import {
   type EffectClassification,
 } from "./effects.js";
 import { getTtsProvider } from "./tts.js";
+import { makeGrabBag } from "./grabbag.js";
 
 /**
  * Typed Socket.IO server for the M0 realtime core. Rooms map 1:1 to circle ids;
@@ -451,6 +452,10 @@ export function createSocketServer(
     let timer: ReturnType<typeof setTimeout> | undefined;
     const { phrases, voiceGain, minGap, maxGap, voice, bedId } = opts;
 
+    // Grab bag: cycle through the whole library before repeating, so the same
+    // line never plays twice in a row (vs. independent random picks).
+    const drawPhrase = makeGrabBag(phrases);
+
     // Pre-warm the TTS cache so the first fires aren't delayed by synthesis.
     const tts = getTtsProvider();
     for (const phrase of phrases) void tts.synthesize(phrase, voice).catch(() => {});
@@ -460,7 +465,7 @@ export function createSocketServer(
       try {
         const present = presentPlayerSockets(circleId);
         const recipientIds = resolveTargets(record.target, [...present.keys()]);
-        const phrase = phrases[Math.floor(Math.random() * phrases.length)];
+        const phrase = drawPhrase();
         const whisperPlayerId =
           recipientIds[Math.floor(Math.random() * recipientIds.length)];
         const sock =
