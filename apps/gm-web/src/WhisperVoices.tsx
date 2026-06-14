@@ -22,12 +22,21 @@ import type {
 import { palette, radius, space } from "@minorillusion/design-system";
 import { socket } from "./socket";
 
-const STORE_KEY = "mi.gm.whisper.phrases";
+const STORE_KEY = "mi.gm.whisper.phrases"; // the looping list (back-compat key)
+const PARK_KEY = "mi.gm.whisper.parked"; // the storage (non-looping) list
 const VOICE_KEY = "mi.gm.whisper.voice";
 
-function loadPhrases(): string[] {
+/** The two phrase lists: "loop" rides the whisperscape; "parked" is storage. */
+type ListId = "loop" | "parked";
+interface DragRef {
+  list: ListId;
+  /** Row index, or the list length to mean "drop at the end". */
+  idx: number;
+}
+
+function loadList(key: string): string[] {
   try {
-    const raw = localStorage.getItem(STORE_KEY);
+    const raw = localStorage.getItem(key);
     const parsed = raw ? (JSON.parse(raw) as unknown) : [];
     return Array.isArray(parsed) ? parsed.filter((p): p is string => typeof p === "string") : [];
   } catch {
@@ -48,7 +57,7 @@ interface VoiceOption {
 }
 const VOICES: VoiceOption[] = [
   { key: "voice1", label: "Voice 1 (default)" },
-  { key: "voice2", label: "Voice 2", id: "17JdVkQHD6PE3HPohzr2" },
+  { key: "voice2", label: "Voice 2", id: "6sFKzaJr574YWVu4UuJF" },
 ];
 
 function loadVoiceKey(): string {
@@ -61,7 +70,10 @@ function loadVoiceKey(): string {
 }
 
 export function WhisperVoices({ players }: { players: Player[] }) {
-  const [phrases, setPhrases] = useState<string[]>(() => loadPhrases());
+  // Two lists: "loop" plays as the whisperscape ambience; "parked" is storage —
+  // kept on hand but NOT looped (▶ still plays a parked line manually).
+  const [loopPhrases, setLoopPhrases] = useState<string[]>(() => loadList(STORE_KEY));
+  const [parkedPhrases, setParkedPhrases] = useState<string[]>(() => loadList(PARK_KEY));
   const [draft, setDraft] = useState("");
   const [order, setOrder] = useState<"random" | "sequential">("random");
   const [loop, setLoop] = useState(true);
@@ -87,9 +99,9 @@ export function WhisperVoices({ players }: { players: Player[] }) {
   const [voiceKey, setVoiceKey] = useState<string>(() => loadVoiceKey());
   const selectedVoiceId = VOICES.find((v) => v.key === voiceKey)?.id;
 
-  // Drag-and-drop reordering of the phrase library (native HTML5 DnD).
-  const [dragIdx, setDragIdx] = useState<number | null>(null);
-  const [overIdx, setOverIdx] = useState<number | null>(null);
+  // Drag-and-drop within and between the two lists (native HTML5 DnD).
+  const [drag, setDrag] = useState<DragRef | null>(null);
+  const [over, setOver] = useState<DragRef | null>(null);
 
   // Target — like the storm, the whole whisperscape can aim at one player.
   const [targetMode, setTargetMode] = useState<"broadcast" | "players">("broadcast");
@@ -97,11 +109,19 @@ export function WhisperVoices({ players }: { players: Player[] }) {
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify(phrases));
+      localStorage.setItem(STORE_KEY, JSON.stringify(loopPhrases));
     } catch {
       /* storage unavailable */
     }
-  }, [phrases]);
+  }, [loopPhrases]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PARK_KEY, JSON.stringify(parkedPhrases));
+    } catch {
+      /* storage unavailable */
+    }
+  }, [parkedPhrases]);
 
   useEffect(() => {
     try {
@@ -123,24 +143,49 @@ export function WhisperVoices({ players }: { players: Player[] }) {
     });
   }
 
+  // New lines join the looping list (the schema sends at most 50).
   function addPhrase() {
     const t = draft.trim();
-    if (t.length === 0 || phrases.length >= 50) return;
-    setPhrases((p) => [...p, t.slice(0, 300)]);
+    if (t.length === 0 || loopPhrases.length >= 50) return;
+    setLoopPhrases((p) => [...p, t.slice(0, 300)]);
     setDraft("");
   }
 
-  /** Move a phrase from one position to another (drag-and-drop reorder). */
-  function reorder(from: number, to: number) {
-    setPhrases((cur) => {
-      if (from === to || from < 0 || to < 0 || from >= cur.length || to >= cur.length) {
-        return cur;
-      }
-      const next = [...cur];
-      const [moved] = next.splice(from, 1);
-      next.splice(to, 0, moved as string);
-      return next;
-    });
+  function removeFrom(list: ListId, i: number) {
+    const setter = list === "loop" ? setLoopPhrases : setParkedPhrases;
+    setter((cur) => cur.filter((_, idx) => idx !== i));
+  }
+
+  function endDrag() {
+    setDrag(null);
+    setOver(null);
+  }
+
+  /**
+   * Move a phrase within or between the two lists. Reordering within a list and
+   * dragging across lists share one path: splice out of the source, insert into
+   * the destination (adjusting the index when removal shifts a same-list target).
+   * Won't overflow the looping list past 50 (the schema's cap on what it sends).
+   */
+  function moveItem(from: DragRef, to: DragRef) {
+    const loop = [...loopPhrases];
+    const parked = [...parkedPhrases];
+    const src = from.list === "loop" ? loop : parked;
+    const moved = src[from.idx];
+    if (moved === undefined) return;
+    if (to.list === "loop" && from.list !== "loop" && loop.length >= 50) return;
+    src.splice(from.idx, 1);
+    const dest = to.list === "loop" ? loop : parked;
+    let idx = to.idx;
+    if (from.list === to.list && from.idx < to.idx) idx -= 1;
+    dest.splice(Math.max(0, Math.min(dest.length, idx)), 0, moved);
+    setLoopPhrases(loop);
+    setParkedPhrases(parked);
+  }
+
+  function onDropAt(to: DragRef) {
+    if (drag) moveItem(drag, to);
+    endDrag();
   }
 
   function buildTarget(): Target {
@@ -190,8 +235,8 @@ export function WhisperVoices({ players }: { players: Player[] }) {
   }
 
   function start() {
-    if (phrases.length === 0) {
-      setStatus("Add at least one phrase.");
+    if (loopPhrases.length === 0) {
+      setStatus("Add at least one looping phrase.");
       return;
     }
     if (!targetReady) {
@@ -201,7 +246,7 @@ export function WhisperVoices({ players }: { players: Player[] }) {
     setBusy(true);
     const req: WhisperscapeRequest = {
       target: buildTarget(),
-      phrases,
+      phrases: loopPhrases,
       order,
       loop,
       // The whisperscape rides its own bed, so only echo/distortion/pan apply.
@@ -224,13 +269,117 @@ export function WhisperVoices({ players }: { players: Player[] }) {
     });
   }
 
+  /** Render one phrase list (looping or storage) with cross-list drag-and-drop. */
+  function renderSection(
+    list: ListId,
+    items: string[],
+    label: string,
+    hint: string,
+    showOrdinals: boolean,
+  ) {
+    const endOver = drag !== null && over?.list === list && over.idx >= items.length;
+    return (
+      <div style={{ marginTop: space(3) }}>
+        <label style={labelStyle}>{label}</label>
+        <ul
+          onDragOver={(e) => {
+            e.preventDefault();
+            if (drag) setOver({ list, idx: items.length });
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            onDropAt({ list, idx: items.length });
+          }}
+          style={{
+            listStyle: "none",
+            margin: `${space(2)} 0 0`,
+            padding: items.length === 0 ? space(3) : 0,
+            display: "flex",
+            flexDirection: "column",
+            gap: space(1),
+            minHeight: items.length === 0 ? 40 : undefined,
+            border: items.length === 0 ? `1px dashed ${endOver ? palette.ember : palette.ash}` : undefined,
+            borderRadius: radius.sm,
+            background: endOver && items.length === 0 ? palette.emberDim : "transparent",
+          }}
+        >
+          {items.length === 0 ? (
+            <li style={emptyDropStyle}>{hint}</li>
+          ) : (
+            items.map((p, i) => {
+              const id = `${list}:${i}`;
+              const isDragging = drag?.list === list && drag.idx === i;
+              const isOver = drag !== null && over?.list === list && over.idx === i && !isDragging;
+              return (
+                <li
+                  key={`${list}-${i}-${p}`}
+                  draggable
+                  onDragStart={(e) => {
+                    setDrag({ list, idx: i });
+                    e.dataTransfer.effectAllowed = "move";
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.dataTransfer.dropEffect = "move";
+                    setOver({ list, idx: i });
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onDropAt({ list, idx: i });
+                  }}
+                  onDragEnd={endDrag}
+                  style={{
+                    ...phraseRowStyle,
+                    cursor: "grab",
+                    opacity: isDragging ? 0.4 : 1,
+                    boxShadow: isOver ? `inset 0 2px 0 ${palette.ember}` : "none",
+                  }}
+                >
+                  <span aria-hidden="true" style={gripStyle} title="Drag to reorder or move between lists">
+                    ⠿
+                  </span>
+                  {showOrdinals && <span style={ordinalStyle}>{i + 1}</span>}
+                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {p}
+                  </span>
+                  <button
+                    draggable={false}
+                    onClick={() => fireSpeak(p, id)}
+                    disabled={!targetReady || playId === id}
+                    style={playButtonStyle(!targetReady || playId === id)}
+                    aria-label="Play this phrase now"
+                    title="Play now"
+                  >
+                    ▶
+                  </button>
+                  <button
+                    draggable={false}
+                    onClick={() => removeFrom(list, i)}
+                    style={removeButtonStyle}
+                    aria-label="Remove phrase"
+                    title="Remove"
+                  >
+                    ×
+                  </button>
+                </li>
+              );
+            })
+          )}
+        </ul>
+      </div>
+    );
+  }
+
   return (
     <section style={cardStyle}>
       <h2 style={sectionHeadingStyle}>Whisper voices</h2>
       <p style={hintStyle}>
         A dissonant bed with phrases that surface as echoing whispers — one ear at a
-        time. Type a line to add it or speak it now; drag to reorder; ▶ plays any
-        phrase at once. Voice FX colour every spoken line. Stop it from Active effects.
+        time. Phrases <em>in the loop</em> play as the ambience; drag any to{" "}
+        <em>storage</em> to keep it on hand without looping (▶ still plays it). Type
+        to add or speak now; Voice FX colour every line. Stop it from Active effects.
       </p>
 
       {/* Target — aim the whole whisperscape at everyone or specific players. */}
@@ -288,77 +437,25 @@ export function WhisperVoices({ players }: { players: Player[] }) {
         </button>
       </div>
 
-      {phrases.length === 0 ? (
-        <p style={{ ...hintStyle, fontStyle: "italic", marginTop: space(2) }}>No phrases yet.</p>
-      ) : (
-        <ul style={{ listStyle: "none", margin: `${space(3)} 0 0`, padding: 0, display: "flex", flexDirection: "column", gap: space(1) }}>
-          {phrases.map((p, i) => {
-            const isDragging = dragIdx === i;
-            const isOver = overIdx === i && dragIdx !== null && dragIdx !== i;
-            return (
-              <li
-                key={`${i}-${p}`}
-                draggable
-                onDragStart={(e) => {
-                  setDragIdx(i);
-                  e.dataTransfer.effectAllowed = "move";
-                }}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = "move";
-                  if (overIdx !== i) setOverIdx(i);
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  if (dragIdx !== null) reorder(dragIdx, i);
-                  setDragIdx(null);
-                  setOverIdx(null);
-                }}
-                onDragEnd={() => {
-                  setDragIdx(null);
-                  setOverIdx(null);
-                }}
-                style={{
-                  ...phraseRowStyle,
-                  cursor: "grab",
-                  opacity: isDragging ? 0.4 : 1,
-                  boxShadow: isOver ? `inset 0 2px 0 ${palette.ember}` : "none",
-                }}
-              >
-                <span aria-hidden="true" style={gripStyle} title="Drag to reorder">
-                  ⠿
-                </span>
-                <span style={ordinalStyle}>{i + 1}</span>
-                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {p}
-                </span>
-                <button
-                  draggable={false}
-                  onClick={() => fireSpeak(p, `phrase:${i}`)}
-                  disabled={!targetReady || playId === `phrase:${i}`}
-                  style={playButtonStyle(!targetReady || playId === `phrase:${i}`)}
-                  aria-label="Play this phrase now"
-                  title="Play now"
-                >
-                  ▶
-                </button>
-                <button
-                  draggable={false}
-                  onClick={() => setPhrases((cur) => cur.filter((_, idx) => idx !== i))}
-                  style={removeButtonStyle}
-                  aria-label="Remove phrase"
-                  title="Remove"
-                >
-                  ×
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+      {/* Two lists: the loop (whisperscape ambience) + storage (parked, ▶ only).
+          Drag rows to reorder, or between the lists to include / park a phrase. */}
+      {renderSection(
+        "loop",
+        loopPhrases,
+        "In the loop",
+        "Drop phrases here to weave them into the whisper loop.",
+        true,
+      )}
+      {renderSection(
+        "parked",
+        parkedPhrases,
+        "Storage — not looped",
+        "Drag phrases here to keep them on hand without looping (▶ still plays them).",
+        false,
       )}
 
-      {/* Playback — phrase order + repeat. Drag the rows above to set the order. */}
-      {phrases.length > 0 && (
+      {/* Playback — phrase order + repeat (the looping list). Drag to set order. */}
+      {loopPhrases.length > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: space(4), marginTop: space(3) }}>
           <div style={{ display: "flex", flexDirection: "column", gap: space(2) }}>
             <label style={labelStyle}>Order</label>
@@ -431,8 +528,8 @@ export function WhisperVoices({ players }: { players: Player[] }) {
 
       <button
         onClick={start}
-        disabled={busy || phrases.length === 0 || !targetReady}
-        style={startButtonStyle(busy || phrases.length === 0 || !targetReady)}
+        disabled={busy || loopPhrases.length === 0 || !targetReady}
+        style={startButtonStyle(busy || loopPhrases.length === 0 || !targetReady)}
       >
         {busy ? "Starting…" : "Start whispers"}
       </button>
@@ -625,6 +722,14 @@ const removeButtonStyle: React.CSSProperties = {
   cursor: "pointer",
   padding: `0 ${space(1)}`,
   flexShrink: 0,
+};
+
+const emptyDropStyle: React.CSSProperties = {
+  listStyle: "none",
+  fontSize: "0.8rem",
+  color: "var(--text-dim)",
+  fontStyle: "italic",
+  textAlign: "center",
 };
 
 const gripStyle: React.CSSProperties = {
