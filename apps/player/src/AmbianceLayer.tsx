@@ -175,11 +175,11 @@ export function AmbianceLayer({ scene, intensity = 1, fadeMs }: AmbianceLayerPro
     setReady(true);
   }, []);
 
-  // Entering "clear" sweeps any audio loop (the rain bed) — belt-and-braces with
-  // StormLayer's own unmount stop, in case scene flips clear before unmount runs.
-  useEffect(() => {
-    if (scene === "clear") audio.stopAll();
-  }, [scene]);
+  // NB: do NOT sweep audio here when the scene clears. The rain bed is owned by
+  // StormLayer/RainLayer and stopped on their unmount (useRainBed's handle.stop),
+  // so a blanket audio.stopAll() is redundant — and it would also kill unrelated
+  // beds, e.g. an active whisperscape that overlaps the same player (the bug where
+  // stopping the storm silenced the still-running whispers).
 
   if (!ready) return null;
 
