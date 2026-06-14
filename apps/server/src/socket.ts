@@ -29,7 +29,7 @@ import {
   resolveTargets,
   type EffectClassification,
 } from "./effects.js";
-import { getTtsProvider } from "./tts.js";
+import { estimateClipMs, getTtsProvider } from "./tts.js";
 import { makePhraseSequencer } from "./grabbag.js";
 
 /**
@@ -524,10 +524,8 @@ export function createSocketServer(
     const tts = getTtsProvider();
     for (const phrase of phrases) void tts.synthesize(phrase, voice).catch(() => {});
 
-    // Rough spoken length (+ an echo tail) so a non-looping run lets its final
-    // phrase play out before the bed fades — mirrors the panel's playout estimate.
-    const playoutMs = (text: string): number =>
-      Math.min(20_000, 1500 + text.length * 60) + 2500;
+    // Reverb tail so a clip rings out before the bed fades on a non-looping stop.
+    const ECHO_TAIL_MS = 1500;
 
     const fire = async (): Promise<void> => {
       if (stopped) return;
@@ -542,6 +540,8 @@ export function createSocketServer(
         order,
         loop,
       });
+      // How long the clip we deliver this fire will play (0 if none delivered).
+      let clipMs = 0;
       try {
         const present = presentPlayerSockets(circleId);
         const recipientIds = resolveTargets(record.target, [...present.keys()]);
@@ -562,6 +562,10 @@ export function createSocketServer(
           if (!stopped) {
             sock.emit("effect:deliver", eff);
             mirrorToGMs(circleId, [whisperPlayerId], eff);
+            clipMs = estimateClipMs(
+              step.phrase,
+              eff.kind === "audio" && eff.source.via === "data" ? eff.source.data : undefined,
+            );
           }
         }
       } catch (err) {
@@ -569,14 +573,18 @@ export function createSocketServer(
       }
       if (stopped) return;
       if (step.done) {
-        // Non-looping run: let the final phrase play out, then end the bed and
+        // Non-looping run: let the final phrase ring out, then end the bed and
         // drop the record (active.remove runs stopWhispers + re-pushes).
         timer = setTimeout(() => {
           if (!stopped) active.remove(circleId, record.id);
-        }, playoutMs(step.phrase));
+        }, clipMs + ECHO_TAIL_MS);
         return;
       }
-      timer = setTimeout(() => void fire(), minGap + Math.random() * (maxGap - minGap));
+      // Schedule the NEXT whisper only after this one FINISHES, then the random
+      // gap — so the gap starts at clip end and a long clip never overlaps the
+      // next one (the bug: scheduling off the gap alone stacked long clips).
+      const gap = minGap + Math.random() * (maxGap - minGap);
+      timer = setTimeout(() => void fire(), clipMs + gap);
     };
 
     record.stopWhispers = () => {
