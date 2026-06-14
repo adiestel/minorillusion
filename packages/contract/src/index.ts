@@ -389,6 +389,9 @@ export const activeEffectSchema = z.object({
   startedAt: z.string().datetime(),
   /** Transient effects only: ms from startedAt until it auto-closes. */
   durationMs: z.number().int().nonnegative().optional(),
+  /** ambiance only: the running scene, so the GM Stage can paint each tile's
+   *  background from the authoritative registry (and seed it on reconnect). */
+  scene: ambianceScene.optional(),
 });
 export type ActiveEffect = z.infer<typeof activeEffectSchema>;
 
@@ -400,6 +403,20 @@ export type ActiveEffects = z.infer<typeof activeEffectsSchema>;
 
 export const stopEffectResultSchema = z.object({ ok: z.boolean() });
 export type StopEffectResult = z.infer<typeof stopEffectResultSchema>;
+
+// ---------------------------------------------------------------------------
+// Effect mirror — a read-only copy of each delivered effect, fanned to the GM
+// so the GM's live Stage can render what every player is seeing (incl. the
+// server-driven storm strikes that never enter the registry). `playerIds` is
+// who actually received it. Purely informational: the GM never plays the audio
+// or vibrates — it paints a silent visual mirror.
+// ---------------------------------------------------------------------------
+
+export const effectMirrorSchema = z.object({
+  playerIds: z.array(z.string().uuid()),
+  effect: deliveredEffectSchema,
+});
+export type EffectMirror = z.infer<typeof effectMirrorSchema>;
 
 // ---------------------------------------------------------------------------
 // Socket.IO event maps (typed on both ends)
@@ -416,6 +433,8 @@ export interface ServerToClientEvents {
   "effect:acked": (info: { effectId: string; playerId: string }) => void;
   /** Server pushes the circle's live active-effects registry to the GM(s). */
   "effects:active": (active: ActiveEffects) => void;
+  /** Server mirrors a delivered effect to the GM(s) for the live Stage view. */
+  "effect:mirror": (info: EffectMirror) => void;
 }
 
 export interface ClientToServerEvents {

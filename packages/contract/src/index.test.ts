@@ -6,6 +6,7 @@ import {
   audioCue,
   circleSchema,
   deliveredEffectSchema,
+  effectMirrorSchema,
   effectSpecSchema,
   hapticPattern,
   joinRequestSchema,
@@ -251,5 +252,56 @@ describe("active-effects control rework", () => {
     expect(AUDIO_CUE_DURATION_MS.thunder).toBeGreaterThan(0);
     expect(AUDIO_CUE_DURATION_MS.chime).toBeGreaterThan(0);
     expect(AUDIO_CUE_DURATION_MS.rain).toBe(0);
+  });
+
+  it("carries an ambiance scene on an active record (drives the GM Stage)", () => {
+    const r = activeEffectSchema.safeParse({
+      id: crypto.randomUUID(),
+      kind: "ambiance",
+      label: "Storm",
+      target: { kind: "broadcast" },
+      sustained: true,
+      startedAt: now,
+      scene: "storm",
+    });
+    expect(r.success).toBe(true);
+    // A non-scene (bad enum) is rejected.
+    expect(
+      activeEffectSchema.safeParse({
+        id: crypto.randomUUID(),
+        kind: "ambiance",
+        label: "Blizzard",
+        target: { kind: "broadcast" },
+        sustained: true,
+        startedAt: now,
+        scene: "blizzard",
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("effect mirror (GM Stage live view)", () => {
+  const now = new Date().toISOString();
+
+  it("validates a mirrored flash with its recipient ids", () => {
+    const r = effectMirrorSchema.safeParse({
+      playerIds: [crypto.randomUUID(), crypto.randomUUID()],
+      effect: {
+        id: crypto.randomUUID(),
+        kind: "flash",
+        intensity: 0.85,
+        durationMs: 320,
+        createdAt: now,
+      },
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("rejects a mirror whose recipient ids are not uuids", () => {
+    const r = effectMirrorSchema.safeParse({
+      playerIds: ["not-a-uuid"],
+      effect: { id: crypto.randomUUID(), kind: "haptic", pattern: "buzz", createdAt: now },
+    });
+    expect(r.success).toBe(false);
   });
 });

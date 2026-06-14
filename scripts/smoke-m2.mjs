@@ -154,6 +154,22 @@ try {
     latestActive = a.effects;
   });
 
+  // Collect mirrored effects pushed to the GM (drives the live Stage view).
+  const mirrors = [];
+  gm.on("effect:mirror", (m) => mirrors.push(m));
+
+  // A plain effect:send mirrors to the GM with the recipient player id(s).
+  const mirrorChime = waitFor(gm, "effect:mirror", (m) => m.effect.kind === "audio" && m.effect.source.cue === "chime");
+  await gm.timeout(5000).emitWithAck("effect:send", {
+    target: { kind: "broadcast" },
+    spec: { kind: "audio", source: { via: "cue", cue: "chime" } },
+  });
+  const chimeMirror = await mirrorChime;
+  check(
+    chimeMirror.playerIds.includes(playerId),
+    "GM received effect:mirror for a sent effect (with the recipient id)",
+  );
+
   // Rain LOOP → appears in effects:active as sustained; player gets the loop.
   let activeP = waitFor(gm, "effects:active", (a) => a.effects.some((e) => e.sustained && e.label === "Rain"));
   const rainDeliver = waitFor(player, "effect:deliver", (e) => e.kind === "audio" && e.source.cue === "rain");
@@ -211,12 +227,17 @@ try {
     spec: { kind: "ambiance", scene: "storm" },
   });
   check(stormSend.ok === true, "storm effect:send acked");
-  await waitUntil(() => latestActive.some((e) => e.id === stormSend.effectId && e.label === "Storm"));
-  ok("storm shows in effects:active as sustained (new id)");
+  await waitUntil(() =>
+    latestActive.some((e) => e.id === stormSend.effectId && e.label === "Storm" && e.scene === "storm"),
+  );
+  ok("storm shows in effects:active as sustained, carrying scene=storm (drives the Stage)");
   await flashDeliver;
   ok("storm runner delivered a lightning flash to the player");
   await stormClap;
   ok("storm runner delivered a (randomly-targeted) thunderclap");
+  // The room-wide flash also mirrors to the GM's Stage.
+  await waitUntil(() => mirrors.some((m) => m.effect.kind === "flash" && m.playerIds.includes(playerId)));
+  ok("GM received an effect:mirror for the storm lightning flash");
 
   // Switch to Rain → storm is replaced (weather is mutually exclusive, no layering).
   const stormEnded = waitFor(player, "effect:end", (i) => i.effectId === stormSend.effectId);

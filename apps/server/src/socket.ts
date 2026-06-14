@@ -7,6 +7,7 @@ import {
   sendCueRequestSchema,
   sendEffectRequestSchema,
   type ActiveEffect,
+  type AmbianceScene,
   type ClientToServerEvents,
   type DeliveredEffect,
   type ServerToClientEvents,
@@ -53,6 +54,8 @@ interface ActiveEffectRecord {
   sustained: boolean;
   startedAt: string;
   durationMs?: number;
+  /** ambiance only: the running scene, surfaced so the GM Stage can paint it. */
+  scene?: AmbianceScene;
   /** Transient effects: fires remove() when the effect auto-closes. */
   expireTimer?: ReturnType<typeof setTimeout>;
   /** Storm records: cancels the self-rescheduling strike runner. */
@@ -102,6 +105,8 @@ class ActiveEffectRegistry {
       startedAt: new Date().toISOString(),
     };
     if (classified.durationMs !== undefined) record.durationMs = classified.durationMs;
+    // ambiance carries its scene so the GM Stage can paint each tile.
+    if (effect.kind === "ambiance") record.scene = effect.scene;
 
     // Transient: auto-close after its duration (sustained effects need a stop).
     if (!classified.sustained && classified.durationMs !== undefined) {
@@ -149,6 +154,7 @@ class ActiveEffectRegistry {
         startedAt: r.startedAt,
       };
       if (r.durationMs !== undefined) effect.durationMs = r.durationMs;
+      if (r.scene !== undefined) effect.scene = r.scene;
       effects.push(effect);
     }
     return effects;
@@ -237,6 +243,24 @@ export function createSocketServer(
     return result;
   }
 
+  /**
+   * Mirror a delivered effect to the circle's GM sockets so the GM's live Stage
+   * can render what the players are seeing (incl. server-driven storm strikes
+   * that never enter the registry). `playerIds` is who actually received it. A
+   * read-only copy — the GM paints a silent visual, never plays the sound.
+   * Skipped when no one received the effect (nothing to mirror).
+   */
+  function mirrorToGMs(
+    circleId: string,
+    playerIds: string[],
+    effect: DeliveredEffect,
+  ): void {
+    if (playerIds.length === 0) return;
+    for (const gm of gmSockets(circleId)) {
+      gm.emit("effect:mirror", { playerIds, effect });
+    }
+  }
+
   /** Does any socket (GM or player) remain bound to a circle? */
   function circleHasSockets(circleId: string): boolean {
     for (const state of bindings.values()) {
@@ -306,16 +330,22 @@ export function createSocketServer(
           for (const playerId of recipientIds) {
             present.get(playerId)?.emit("effect:deliver", flash);
           }
+          // Mirror the room-wide flash to the GM Stage (all in-target tiles flash).
+          mirrorToGMs(circleId, recipientIds, flash);
           const clapPlayerId =
             recipientIds[Math.floor(Math.random() * recipientIds.length)];
           const clapSocket =
             clapPlayerId !== undefined ? present.get(clapPlayerId) : undefined;
-          if (clapSocket) {
+          if (clapSocket && clapPlayerId !== undefined) {
             const clap = await buildEffect(
               { kind: "audio", source: { via: "cue", cue: "thunder" } },
               { startDelayMs: Math.round(150 + Math.random() * 950) },
             );
-            if (!stopped) clapSocket.emit("effect:deliver", clap);
+            if (!stopped) {
+              clapSocket.emit("effect:deliver", clap);
+              // Mirror the clap to the GM Stage (one tile shows the thunder pip).
+              mirrorToGMs(circleId, [clapPlayerId], clap);
+            }
           }
         }
       } catch (err) {
@@ -439,12 +469,16 @@ export function createSocketServer(
       ]);
 
       let deliveredTo = 0;
+      const reached: string[] = [];
       for (const playerId of recipientIds) {
         const playerSocket = present.get(playerId);
         if (!playerSocket) continue;
         playerSocket.emit("effect:deliver", effect);
+        reached.push(playerId);
         deliveredTo++;
       }
+      // Mirror to the GM Stage (who saw what) before the registry bookkeeping.
+      mirrorToGMs(state.circleId, reached, effect);
 
       // Reflect this effect in the GM's active-effects registry per its kind.
       const spec = parsed.data.spec;
@@ -521,6 +555,8 @@ export function createSocketServer(
         for (const playerSocket of recipients) {
           playerSocket.emit("effect:deliver", effect);
         }
+        // Mirror each step to the GM Stage (every recipient got every step).
+        mirrorToGMs(state.circleId, recipientIds, effect);
         // Each effect can be acknowledged independently; route every ack home.
         effectSenders.set(effect.id, socket.id);
         // Reflect each step in the registry per its kind (cue is rarely used now,

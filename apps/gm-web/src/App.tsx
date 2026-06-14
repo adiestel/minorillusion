@@ -26,6 +26,7 @@ import { socket } from "./socket";
 import { MessageComposer } from "./MessageComposer";
 import { Soundboard } from "./Soundboard";
 import { ActiveEffects } from "./ActiveEffects";
+import { Stage } from "./Stage";
 
 // ---------------------------------------------------------------------------
 // Session-restore helpers
@@ -177,8 +178,16 @@ export function App() {
         <StatusDot connected={connected} />
       </header>
 
-      {/* Main */}
-      <main style={{ padding: `${space(8)} ${space(5)}`, maxWidth: "520px", margin: "0 auto" }}>
+      {/* Main — widen to a console when a circle is active (room for the Stage). */}
+      <main
+        style={{
+          padding: `${space(8)} ${space(5)}`,
+          maxWidth: state.phase === "active" ? "1040px" : "520px",
+          margin: "0 auto",
+          width: "100%",
+          boxSizing: "border-box",
+        }}
+      >
         {state.phase === "restoring" ? (
           <RestoringView />
         ) : state.phase === "idle" ? (
@@ -323,136 +332,120 @@ interface CirclePanelProps {
   onLeave: () => void;
 }
 
+type Tab = "stage" | "effects" | "messages";
+
 function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
+  const [tab, setTab] = useState<Tab>("stage");
+  const connected = players.filter((p) => p.connected).length;
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: space(8) }}>
-      {/* Join code — prominent */}
-      <section style={sectionStyle}>
-        <h2 style={sectionHeadingStyle}>Join code</h2>
-        <p style={{ margin: `0 0 ${space(3)}`, color: "var(--text-dim)", fontSize: "0.88rem" }}>
-          Share this with your players.
-        </p>
-        <div style={{
-          display: "inline-block",
-          padding: `${space(4)} ${space(6)}`,
-          background: "var(--surface)",
-          border: `1px solid ${palette.emberDim}`,
-          borderRadius: radius.md,
-        }}>
-          <span style={{
-            fontSize: "3rem",
-            fontWeight: 800,
-            letterSpacing: "0.25em",
-            color: palette.ember,
-            fontVariantNumeric: "tabular-nums",
-          }}>
-            {circle.code}
+    <div style={{ display: "flex", flexDirection: "column", gap: space(6) }}>
+      {/* Circle header — always visible: join code, live count, leave. */}
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: space(4),
+        flexWrap: "wrap",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: space(4), flexWrap: "wrap" }}>
+          <CodeChip code={circle.code} />
+          <span style={{ fontSize: "0.88rem", color: "var(--text-dim)" }}>
+            {connected}/{players.length} {players.length === 1 ? "player" : "players"}
+            {circle.name ? ` · ${circle.name}` : ""}
           </span>
         </div>
-        {circle.name && (
-          <p style={{ margin: `${space(3)} 0 0`, color: "var(--text-dim)", fontSize: "0.88rem" }}>
-            {circle.name}
-          </p>
-        )}
-      </section>
-
-      {/* Presence list */}
-      <section style={sectionStyle}>
-        <h2 style={sectionHeadingStyle}>
-          Players
-          <span style={{
-            marginLeft: space(2),
-            padding: `2px ${space(2)}`,
-            background: palette.ash,
-            borderRadius: radius.pill,
-            fontSize: "0.75rem",
-            fontWeight: 600,
-            verticalAlign: "middle",
-          }}>
-            {players.filter((p) => p.connected).length}/{players.length}
-          </span>
-        </h2>
-
-        {players.length === 0 ? (
-          <p style={{ color: "var(--text-dim)", fontSize: "0.92rem" }}>
-            Waiting for players to join…
-          </p>
-        ) : (
-          <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: space(2) }}>
-            {players.map((player) => (
-              <PlayerRow key={player.id} player={player} />
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <Divider />
-
-      {/* M1 — message composer */}
-      <MessageComposer players={players} />
-
-      <Divider />
-
-      {/* M2 — soundboard: one-tap atmosphere triggers */}
-      <Soundboard players={players} />
-
-      <Divider />
-
-      {/* M2 — live registry of running effects (stop / countdown) */}
-      <ActiveEffects circle={circle} players={players} />
-
-      <Divider />
-
-      {/* Leave control — detaches this browser only; does not end the circle server-side */}
-      <section style={sectionStyle}>
-        <h2 style={sectionHeadingStyle}>Session</h2>
-        <p style={{ margin: `0 0 ${space(4)}`, color: "var(--text-dim)", fontSize: "0.88rem" }}>
-          Leave this circle on this device. The circle stays active for your players.
-        </p>
-        <button
-          style={leaveButtonStyle}
-          onClick={onLeave}
-        >
-          Leave circle
+        <button style={leaveButtonStyle} onClick={onLeave}>
+          Leave
         </button>
-      </section>
+      </div>
+
+      {/* Tab bar */}
+      <div style={{ display: "flex", gap: space(1), borderBottom: `1px solid ${palette.ash}` }}>
+        {(["stage", "effects", "messages"] as const).map((id) => (
+          <button key={id} onClick={() => setTab(id)} style={tabButtonStyle(tab === id)}>
+            {tabLabel(id)}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab content */}
+      {tab === "stage" && <Stage circle={circle} players={players} />}
+
+      {tab === "effects" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: space(6), maxWidth: 640 }}>
+          <Soundboard players={players} />
+          <ActiveEffects circle={circle} players={players} />
+        </div>
+      )}
+
+      {tab === "messages" && (
+        <div style={{ maxWidth: 640 }}>
+          <MessageComposer players={players} />
+        </div>
+      )}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// PlayerRow
+// CodeChip — compact-but-legible join code (always visible in the header)
 // ---------------------------------------------------------------------------
 
-function PlayerRow({ player }: { player: Player }) {
+function CodeChip({ code }: { code: string }) {
   return (
-    <li style={{
-      display: "flex",
-      alignItems: "center",
-      gap: space(3),
-      padding: `${space(3)} ${space(4)}`,
+    <div style={{
+      display: "inline-flex",
+      alignItems: "baseline",
+      gap: space(2),
+      padding: `${space(2)} ${space(4)}`,
       background: "var(--surface)",
+      border: `1px solid ${palette.emberDim}`,
       borderRadius: radius.md,
-      transition: "opacity 0.2s",
-      opacity: player.connected ? 1 : 0.45,
     }}>
-      {/* Connected dot */}
       <span style={{
-        width: "10px",
-        height: "10px",
-        borderRadius: "50%",
-        background: player.connected ? palette.ember : palette.ash,
-        flexShrink: 0,
-        transition: "background 0.3s",
-      }} />
-      <span style={{ fontWeight: 500 }}>{player.name}</span>
-      {!player.connected && (
-        <span style={{ marginLeft: "auto", fontSize: "0.78rem", color: "var(--text-dim)" }}>
-          disconnected
-        </span>
-      )}
-    </li>
+        fontSize: "0.62rem",
+        letterSpacing: "0.14em",
+        textTransform: "uppercase",
+        color: "var(--text-dim)",
+      }}>
+        Join
+      </span>
+      <span style={{
+        fontSize: "1.55rem",
+        fontWeight: 800,
+        letterSpacing: "0.22em",
+        color: palette.ember,
+        fontVariantNumeric: "tabular-nums",
+      }}>
+        {code}
+      </span>
+    </div>
   );
+}
+
+function tabLabel(id: Tab): string {
+  switch (id) {
+    case "stage": return "Stage";
+    case "effects": return "Effects";
+    case "messages": return "Messages";
+  }
+}
+
+function tabButtonStyle(active: boolean): React.CSSProperties {
+  return {
+    padding: `${space(3)} ${space(4)}`,
+    background: "transparent",
+    color: active ? palette.ember : "var(--text-dim)",
+    border: "none",
+    borderBottom: `2px solid ${active ? palette.ember : "transparent"}`,
+    marginBottom: "-1px",
+    fontWeight: active ? 700 : 500,
+    fontSize: "0.9rem",
+    letterSpacing: "0.04em",
+    cursor: "pointer",
+    transition: "color 0.15s, border-color 0.15s",
+  };
 }
 
 // ---------------------------------------------------------------------------
