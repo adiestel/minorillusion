@@ -14,8 +14,11 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type {
+  CueStep,
   EffectSpec,
   Player,
+  SendCueRequest,
+  SendCueResult,
   SendEffectRequest,
   SendEffectResult,
   Target,
@@ -27,11 +30,16 @@ import { socket } from "./socket";
 // One-tap button definitions
 // ---------------------------------------------------------------------------
 
-/** A single-effect button (fires `effect:send`). */
+/**
+ * A one-tap button — fires either a single effect (`spec` → effect:send) or a
+ * choreographed cue (`steps` → effect:cue, several effects with their own
+ * offsets). Thunderclap is a cue: a single storm strike (flash, then the crack).
+ */
 interface EffectButton {
   id: string;
   label: string;
-  spec: EffectSpec;
+  spec?: EffectSpec;
+  steps?: CueStep[];
 }
 
 /**
@@ -50,7 +58,15 @@ const LOOP_BUTTONS: EffectButton[] = [
  * TTS row is rendered separately below the grid.)
  */
 const ONESHOT_BUTTONS: EffectButton[] = [
-  { id: "thunderclap", label: "Thunderclap", spec: { kind: "audio", source: { via: "cue", cue: "thunder" } } },
+  {
+    id: "thunderclap",
+    label: "Thunderclap",
+    // One storm strike: the lightning flash, then the crack ~150ms behind it.
+    steps: [
+      { spec: { kind: "flash" } },
+      { spec: { kind: "audio", source: { via: "cue", cue: "thunder" } }, startDelayMs: 150 },
+    ],
+  },
   { id: "chime", label: "Chime", spec: { kind: "audio", source: { via: "cue", cue: "chime" } } },
   { id: "buzz", label: "Buzz", spec: { kind: "haptic", pattern: "buzz" } },
   { id: "rumble", label: "Rumble", spec: { kind: "haptic", pattern: "rumble" } },
@@ -120,19 +136,25 @@ export function Soundboard({ players }: SoundboardProps) {
     }
   }
 
-  /** Fire a single effect; `id`/`label` drive busy-state + status text. */
-  function fireEffect(id: string, label: string, spec: EffectSpec) {
+  /** Fire a button — a single effect (effect:send) or a cue (effect:cue). */
+  function fireButton(b: EffectButton) {
     if (!targetReady) return;
-    setBusyId(id);
-    const req: SendEffectRequest = { target: buildTarget(), spec };
-    socket.emit("effect:send", req, (result: SendEffectResult) => {
-      setBusyId((cur) => (cur === id ? null : cur));
+    setBusyId(b.id);
+    const handle = (result: SendEffectResult | SendCueResult) => {
+      setBusyId((cur) => (cur === b.id ? null : cur));
       if (result.ok) {
-        showStatus({ kind: "ok", text: `${label} → ${result.deliveredTo} ${plural(result.deliveredTo)}` });
+        showStatus({ kind: "ok", text: `${b.label} → ${result.deliveredTo} ${plural(result.deliveredTo)}` });
       } else {
-        showStatus({ kind: "error", text: `${label}: ${result.error}` });
+        showStatus({ kind: "error", text: `${b.label}: ${result.error}` });
       }
-    });
+    };
+    if (b.steps !== undefined) {
+      const req: SendCueRequest = { target: buildTarget(), steps: b.steps };
+      socket.emit("effect:cue", req, handle);
+    } else if (b.spec !== undefined) {
+      const req: SendEffectRequest = { target: buildTarget(), spec: b.spec };
+      socket.emit("effect:send", req, handle);
+    }
   }
 
   /** Fire TTS via the audio effect (server resolves it through ElevenLabs). */
@@ -200,7 +222,7 @@ export function Soundboard({ players }: SoundboardProps) {
           <SoundButton
             key={b.id}
             label={b.label}
-            onClick={() => fireEffect(b.id, b.label, b.spec)}
+            onClick={() => fireButton(b)}
             disabled={!targetReady || busyId === b.id}
           />
         ))}
@@ -213,7 +235,7 @@ export function Soundboard({ players }: SoundboardProps) {
           <SoundButton
             key={b.id}
             label={b.label}
-            onClick={() => fireEffect(b.id, b.label, b.spec)}
+            onClick={() => fireButton(b)}
             disabled={!targetReady || busyId === b.id}
           />
         ))}
