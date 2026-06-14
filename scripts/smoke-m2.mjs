@@ -218,11 +218,26 @@ try {
   await stormClap;
   ok("storm runner delivered a (randomly-targeted) thunderclap");
 
-  // Stop the storm → player clears it via effect:end.
-  const stormEnd = waitFor(player, "effect:end", (i) => i.effectId === stormSend.effectId);
-  await gm.timeout(5000).emitWithAck("effect:stop", { effectId: stormSend.effectId });
-  await stormEnd;
-  ok("storm stopped — player received effect:end");
+  // Switch to Rain → storm is replaced (weather is mutually exclusive, no layering).
+  const stormEnded = waitFor(player, "effect:end", (i) => i.effectId === stormSend.effectId);
+  const rainSwitch = await gm.timeout(5000).emitWithAck("effect:send", {
+    target: { kind: "broadcast" },
+    spec: { kind: "ambiance", scene: "rain" },
+  });
+  await stormEnded;
+  ok("starting Rain ended the Storm (no layered weather)");
+  await waitUntil(
+    () =>
+      latestActive.some((e) => e.id === rainSwitch.effectId && e.label === "Rain") &&
+      !latestActive.some((e) => e.id === stormSend.effectId),
+  );
+  ok("Rain replaced Storm in effects:active");
+
+  // Stop the rain → player clears it via effect:end.
+  const rainEnded = waitFor(player, "effect:end", (i) => i.effectId === rainSwitch.effectId);
+  await gm.timeout(5000).emitWithAck("effect:stop", { effectId: rainSwitch.effectId });
+  await rainEnded;
+  ok("rain stopped — player received effect:end");
 
   // --- TTS (live ElevenLabs) — opt-in via SMOKE_TTS=1 ---------------------
   if (process.env.SMOKE_TTS === "1") {

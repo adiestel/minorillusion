@@ -232,8 +232,13 @@ export function classifyEffect(spec: EffectSpec): EffectClassification {
       if (spec.scene === "clear") {
         return { register: false, sustained: false, label: "Calm" };
       }
+      // storm and rain are mutually-exclusive weather beds; one ambiance per
+      // target means starting either replaces the other (no layered rain).
       if (spec.scene === "storm") {
         return { register: true, sustained: true, label: "Storm" };
+      }
+      if (spec.scene === "rain") {
+        return { register: true, sustained: true, label: "Rain" };
       }
       // ember
       return { register: true, sustained: true, label: "Stir embers" };

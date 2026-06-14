@@ -48,7 +48,9 @@ interface EffectButton {
  * scenes (persistent by nature).
  */
 const LOOP_BUTTONS: EffectButton[] = [
-  { id: "rain", label: "Rain", spec: { kind: "audio", source: { via: "cue", cue: "rain" }, loop: true } },
+  // Rain and Storm are mutually-exclusive weather ambiances (one bed, never
+  // layered); starting one replaces the other and the rain bed crossfades.
+  { id: "rain", label: "Rain", spec: { kind: "ambiance", scene: "rain" } },
   { id: "storm", label: "Storm", spec: { kind: "ambiance", scene: "storm" } },
   { id: "embers", label: "Stir embers", spec: { kind: "ambiance", scene: "ember" } },
 ];

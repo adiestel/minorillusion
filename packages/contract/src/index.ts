@@ -133,8 +133,12 @@ export const hapticPattern = z.enum([
 ]);
 export type HapticPattern = z.infer<typeof hapticPattern>;
 
-/** Persistent background scenes — an ambiance effect stays until changed. */
-export const ambianceScene = z.enum(["clear", "storm", "ember"]);
+/**
+ * Persistent background scenes — an ambiance effect stays until changed, and
+ * only one is active per target (starting a new one replaces the old). storm and
+ * rain are mutually-exclusive weather (both own the rain bed; they never layer).
+ */
+export const ambianceScene = z.enum(["clear", "storm", "ember", "rain"]);
 export type AmbianceScene = z.infer<typeof ambianceScene>;
 
 /**

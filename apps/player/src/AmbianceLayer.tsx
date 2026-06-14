@@ -14,6 +14,11 @@
  *             paces it as `flash` effects (rendered by <Flash> in main.tsx) on
  *             top of the ambiance, so strikes stay seconds apart (photosensitivity,
  *             D10) and the GM controls them.
+ *   • rain  — the rain bed + streaks WITHOUT the cold storm vignette or lightning:
+ *             rain at the hearth (the warm ember still glows through). storm and
+ *             rain are mutually exclusive (one ambiance per target), so switching
+ *             between them crossfades the bed via the loop fades rather than
+ *             stacking two rain beds.
  *   • ember — a warm amber glow wash (embers "stirred"); subtle, not a fire.
  *
  * All DOM/CSS — the cheap path (DECISIONS D7/D13; no WebGL). Sub-components are
@@ -94,15 +99,19 @@ function injectStyles(): void {
 // seconds apart and the GM controls them. This layer is the steady backdrop.
 // ---------------------------------------------------------------------------
 
-function StormLayer({ intensity }: { intensity: number }) {
-  // Rain audio bed — owned here: starts on mount, stops on unmount.
+/** The rain audio bed — started on mount, stopped on unmount (both fade, 5s). */
+function useRainBed(gain: number): void {
   useEffect(() => {
     const handle: AudioHandle = audio.play(
       { via: "cue", cue: "rain" },
-      { loop: true, gain: 0.45 },
+      { loop: true, gain },
     );
     return () => handle.stop();
-  }, []);
+  }, [gain]);
+}
+
+function StormLayer({ intensity }: { intensity: number }) {
+  useRainBed(0.45);
 
   // intensity nudges the vignette/rain opacity a little.
   const washStyle: CSSProperties = {
@@ -118,6 +127,15 @@ function StormLayer({ intensity }: { intensity: number }) {
       <div className="mi-storm-rain" style={rainStyle} />
     </>
   );
+}
+
+/** Rain without the storm: the bed + streaks, no cold vignette, no lightning. */
+function RainLayer({ intensity }: { intensity: number }) {
+  useRainBed(0.45);
+  const rainStyle: CSSProperties = {
+    opacity: 0.3 + 0.3 * clamp01(intensity),
+  };
+  return <div className="mi-storm-rain" style={rainStyle} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -167,6 +185,7 @@ export function AmbianceLayer({ scene, intensity = 1 }: AmbianceLayerProps) {
   return (
     <div className="mi-ambiance" aria-hidden="true">
       {scene === "storm" && <StormLayer intensity={intensity} />}
+      {scene === "rain" && <RainLayer intensity={intensity} />}
       {scene === "ember" && <EmberLayer intensity={intensity} />}
     </div>
   );
