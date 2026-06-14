@@ -9,8 +9,11 @@ export interface TtsProvider {
   synthesize(text: string, voice?: string): Promise<Buffer>;
 }
 
-/** A stable ElevenLabs default voice ("Adam") used when the GM names no voice. */
-const DEFAULT_VOICE_ID = "pNInz6obpgDQGcFmaJgB";
+/**
+ * The ElevenLabs voice used when the GM names no voice. Overridable via the
+ * ELEVENLABS_VOICE_ID env var; falls back to the project's chosen default.
+ */
+const DEFAULT_VOICE_ID = "NNlPuk2Pv2RnraA6G8yp";
 
 /**
  * ElevenLabs TTS. POSTs to the text-to-speech endpoint and returns raw MP3
@@ -20,7 +23,8 @@ const DEFAULT_VOICE_ID = "pNInz6obpgDQGcFmaJgB";
 export class ElevenLabsTts implements TtsProvider {
   async synthesize(text: string, voice?: string): Promise<Buffer> {
     const key = process.env.ELEVENLABS_API_KEY;
-    const voiceId = voice ?? DEFAULT_VOICE_ID;
+    // Explicit per-effect voice wins; else an env override; else the default.
+    const voiceId = voice ?? process.env.ELEVENLABS_VOICE_ID ?? DEFAULT_VOICE_ID;
     const res = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
       {
