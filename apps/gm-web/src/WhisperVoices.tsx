@@ -23,6 +23,7 @@ import { palette, radius, space } from "@minorillusion/design-system";
 import { socket } from "./socket";
 
 const STORE_KEY = "mi.gm.whisper.phrases";
+const VOICE_KEY = "mi.gm.whisper.voice";
 
 function loadPhrases(): string[] {
   try {
@@ -31,6 +32,31 @@ function loadPhrases(): string[] {
     return Array.isArray(parsed) ? parsed.filter((p): p is string => typeof p === "string") : [];
   } catch {
     return [];
+  }
+}
+
+/**
+ * The GM voice catalog — which ElevenLabs voice speaks. "Voice 1" carries no id
+ * so the server resolves its default (the ELEVENLABS_VOICE_ID override, else the
+ * built-in), keeping that override working; the rest pin an explicit voice id.
+ * Add new voices here — the chosen id rides every spoken line (one-off + scape).
+ */
+interface VoiceOption {
+  key: string;
+  label: string;
+  id?: string;
+}
+const VOICES: VoiceOption[] = [
+  { key: "voice1", label: "Voice 1 (default)" },
+  { key: "voice2", label: "Voice 2", id: "17JdVkQHD6PE3HPohzr2" },
+];
+
+function loadVoiceKey(): string {
+  try {
+    const raw = localStorage.getItem(VOICE_KEY);
+    return VOICES.some((v) => v.key === raw) ? (raw as string) : VOICES[0]!.key;
+  } catch {
+    return VOICES[0]!.key;
   }
 }
 
@@ -50,12 +76,16 @@ export function WhisperVoices({ players }: { players: Player[] }) {
   // colours both one-off speech (Play now / a phrase's ▶) and the whisperscape's
   // looping phrases. Independent toggles — e.g. echo + distortion without the bed.
   // The bed only wraps ONE-OFF speech; the whisperscape already rides its own bed.
-  const [fxBed, setFxBed] = useState(false);
+  const [fxBed, setFxBed] = useState(true);
   const [fxEcho, setFxEcho] = useState(true);
   const [fxDistortion, setFxDistortion] = useState(true);
   const [fxPan, setFxPan] = useState(true);
   // Which one-off speech is in flight ("draft" or `phrase:<i>`), to show feedback.
   const [playId, setPlayId] = useState<string | null>(null);
+
+  // The chosen TTS voice (persisted). voice1 → undefined (server default).
+  const [voiceKey, setVoiceKey] = useState<string>(() => loadVoiceKey());
+  const selectedVoiceId = VOICES.find((v) => v.key === voiceKey)?.id;
 
   // Drag-and-drop reordering of the phrase library (native HTML5 DnD).
   const [dragIdx, setDragIdx] = useState<number | null>(null);
@@ -72,6 +102,14 @@ export function WhisperVoices({ players }: { players: Player[] }) {
       /* storage unavailable */
     }
   }, [phrases]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(VOICE_KEY, voiceKey);
+    } catch {
+      /* storage unavailable */
+    }
+  }, [voiceKey]);
 
   const connectedPlayers = players.filter((p) => p.connected);
   const targetReady = targetMode === "broadcast" || selectedIds.size > 0;
@@ -132,7 +170,11 @@ export function WhisperVoices({ players }: { players: Player[] }) {
     setPlayId(id);
     const spec: EffectSpec = {
       kind: "audio",
-      source: { via: "tts", text: t.slice(0, 600) },
+      source: {
+        via: "tts",
+        text: t.slice(0, 600),
+        ...(selectedVoiceId ? { voice: selectedVoiceId } : {}),
+      },
       gain: voiceVol,
       ...voiceFx(),
     };
@@ -170,6 +212,7 @@ export function WhisperVoices({ players }: { players: Player[] }) {
       voiceGain: voiceVol,
       minGapMs: Math.round(minSec * 1000),
       maxGapMs: Math.round(Math.max(minSec, maxSec) * 1000),
+      ...(selectedVoiceId ? { voice: selectedVoiceId } : {}),
     };
     socket.emit("whisperscape:start", req, (r: SendEffectResult) => {
       setBusy(false);
@@ -341,6 +384,16 @@ export function WhisperVoices({ players }: { players: Player[] }) {
           </div>
         </div>
       )}
+
+      {/* Voice — which TTS voice speaks (one-off speech + the whisperscape). */}
+      <label style={{ ...labelStyle, marginTop: space(4) }}>Voice</label>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: space(2), marginTop: space(2) }}>
+        {VOICES.map((v) => (
+          <ToggleButton key={v.key} active={voiceKey === v.key} onClick={() => setVoiceKey(v.key)}>
+            {v.label}
+          </ToggleButton>
+        ))}
+      </div>
 
       {/* Voice FX — colours every spoken line: Play now, a phrase's ▶, and the
           whisperscape's looping phrases. The bed wraps one-off speech only (the
