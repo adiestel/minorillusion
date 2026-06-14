@@ -19,6 +19,7 @@ import type {
   Circle,
   Player,
   Target,
+  WhisperProgress,
 } from "@minorillusion/contract";
 import { palette, radius, space } from "@minorillusion/design-system";
 import { socket } from "./socket";
@@ -113,6 +114,7 @@ function ActiveRow({ effect, players, onStop }: ActiveRowProps) {
         <span style={{ fontSize: "0.78rem", color: "var(--text-dim)" }}>
           {targetLabel(effect.target, players)}
         </span>
+        {effect.whisper && <WhisperNow progress={effect.whisper} />}
       </div>
 
       {effect.sustained ? (
@@ -123,6 +125,40 @@ function ActiveRow({ effect, players, onStop }: ActiveRowProps) {
         <Countdown startedAt={effect.startedAt} durationMs={effect.durationMs} />
       )}
     </li>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// WhisperNow — the whisperscape's live phrase readout: the line sounding now
+// (highlighted) plus where it sits in the pass and how many remain. Driven by
+// the authoritative `whisper` progress the server stamps on the active record.
+// ---------------------------------------------------------------------------
+
+function WhisperNow({ progress }: { progress: WhisperProgress }) {
+  const { phrase, index, total, remaining, order, loop } = progress;
+  const meta =
+    `${order === "random" ? "shuffled" : "in order"} · ` +
+    `${index + 1}/${total} · ${remaining} left` +
+    (loop ? " · loops" : "");
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 2, minWidth: 0 }}>
+      <span
+        style={{
+          fontSize: "0.82rem",
+          fontStyle: "italic",
+          color: palette.ember,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+        title={phrase}
+      >
+        “{phrase}”
+      </span>
+      <span style={{ fontSize: "0.72rem", color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>
+        {meta}
+      </span>
+    </div>
   );
 }
 

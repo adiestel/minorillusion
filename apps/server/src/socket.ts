@@ -19,6 +19,7 @@ import {
   type ServerToClientEvents,
   type Target,
   type Viewport,
+  type WhisperProgress,
 } from "@minorillusion/contract";
 import { CircleService } from "./circles.js";
 import {
@@ -29,7 +30,7 @@ import {
   type EffectClassification,
 } from "./effects.js";
 import { getTtsProvider } from "./tts.js";
-import { makeGrabBag } from "./grabbag.js";
+import { makePhraseSequencer } from "./grabbag.js";
 
 /**
  * Typed Socket.IO server for the M0 realtime core. Rooms map 1:1 to circle ids;
@@ -79,6 +80,9 @@ interface ActiveEffectRecord {
   stopStorm?: () => void;
   /** Whisperscape records: cancels the phrase runner + ends the bed. */
   stopWhispers?: () => void;
+  /** Whisperscape records: live phrase progress (which line is sounding, how
+   *  many remain) — surfaced on the wire so the GM panel + Stage can show it. */
+  whisper?: WhisperProgress;
 }
 
 /**
@@ -193,6 +197,22 @@ class ActiveEffectRegistry {
     return this.byCircle.get(circleId)?.get(effectId);
   }
 
+  /**
+   * Update a whisperscape record's live phrase progress and re-push the registry
+   * so the GM panel + Stage highlight the playing phrase. No-op for an unknown
+   * id (the run may have just stopped).
+   */
+  setWhisperProgress(
+    circleId: string,
+    effectId: string,
+    progress: WhisperProgress,
+  ): void {
+    const record = this.byCircle.get(circleId)?.get(effectId);
+    if (!record) return;
+    record.whisper = progress;
+    this.push(circleId);
+  }
+
   /** Every record in a circle (the live snapshot), internal handles stripped. */
   list(circleId: string): ActiveEffect[] {
     const circle = this.byCircle.get(circleId);
@@ -209,6 +229,7 @@ class ActiveEffectRegistry {
       };
       if (r.durationMs !== undefined) effect.durationMs = r.durationMs;
       if (r.scene !== undefined) effect.scene = r.scene;
+      if (r.whisper !== undefined) effect.whisper = r.whisper;
       effects.push(effect);
     }
     return effects;
@@ -464,17 +485,22 @@ export function createSocketServer(
 
   /**
    * Run a whisperscape's phrase runner for an active record. A self-rescheduling
-   * timer fires a random library phrase as real (TTS) speech to ONE random
-   * present player — echo + distortion, NO bed (the bed is already the ambience)
-   * — every minGap–maxGap ms. record.stopWhispers() cancels the loop AND ends the
-   * bed on the present players (effect:stop / circle teardown call it). The
-   * library is pre-warmed so synthesis (cached) doesn't delay the first fires.
+   * timer speaks one library phrase (real TTS, echo + distortion, NO bed — the
+   * bed is already the ambience) to ONE random present player every minGap–maxGap
+   * ms. Phrases play in grab-bag "random" or the GM's "sequential" order, and the
+   * live "now playing / N left" progress is published on the record each fire so
+   * the GM panel + Stage can highlight it. When loop is false the run tears itself
+   * down (ending the bed) after the last phrase plays out. record.stopWhispers()
+   * cancels the loop AND ends the bed (effect:stop / circle teardown call it). The
+   * library is pre-warmed so cached synthesis doesn't delay the first fires.
    */
   function startWhisperscape(
     circleId: string,
     record: ActiveEffectRecord,
     opts: {
       phrases: string[];
+      order: "random" | "sequential";
+      loop: boolean;
       voiceGain: number;
       minGap: number;
       maxGap: number;
@@ -484,31 +510,46 @@ export function createSocketServer(
   ): void {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const { phrases, voiceGain, minGap, maxGap, voice, bedId } = opts;
+    const { phrases, order, loop, voiceGain, minGap, maxGap, voice, bedId } = opts;
 
-    // Grab bag: cycle through the whole library before repeating, so the same
-    // line never plays twice in a row (vs. independent random picks).
-    const drawPhrase = makeGrabBag(phrases);
+    // Phrase order: a no-repeat grab bag ("random") or the GM's order
+    // ("sequential"), tracking the position within the pass for the live readout.
+    const nextPhrase = makePhraseSequencer(phrases, order, loop);
 
     // Pre-warm the TTS cache so the first fires aren't delayed by synthesis.
     const tts = getTtsProvider();
     for (const phrase of phrases) void tts.synthesize(phrase, voice).catch(() => {});
 
+    // Rough spoken length (+ an echo tail) so a non-looping run lets its final
+    // phrase play out before the bed fades — mirrors the panel's playout estimate.
+    const playoutMs = (text: string): number =>
+      Math.min(20_000, 1500 + text.length * 60) + 2500;
+
     const fire = async (): Promise<void> => {
       if (stopped) return;
+      const step = nextPhrase();
+      if (step === null) return; // empty library (guarded upstream)
+      // Publish progress so the GM panel + Stage highlight the playing phrase.
+      active.setWhisperProgress(circleId, record.id, {
+        phrase: step.phrase,
+        index: step.index,
+        total: step.total,
+        remaining: step.remaining,
+        order,
+        loop,
+      });
       try {
         const present = presentPlayerSockets(circleId);
         const recipientIds = resolveTargets(record.target, [...present.keys()]);
-        const phrase = drawPhrase();
         const whisperPlayerId =
           recipientIds[Math.floor(Math.random() * recipientIds.length)];
         const sock =
           whisperPlayerId !== undefined ? present.get(whisperPlayerId) : undefined;
-        if (sock && phrase !== undefined && whisperPlayerId !== undefined) {
+        if (sock && whisperPlayerId !== undefined) {
           // echo + distortion + pan, NO bed (the bed is already the ambience).
           const eff = await buildEffect({
             kind: "audio",
-            source: { via: "tts", text: phrase, ...(voice ? { voice } : {}) },
+            source: { via: "tts", text: step.phrase, ...(voice ? { voice } : {}) },
             echo: true,
             distortion: true,
             pan: true,
@@ -523,6 +564,14 @@ export function createSocketServer(
         app.log.error({ err }, "whisperscape phrase failed");
       }
       if (stopped) return;
+      if (step.done) {
+        // Non-looping run: let the final phrase play out, then end the bed and
+        // drop the record (active.remove runs stopWhispers + re-pushes).
+        timer = setTimeout(() => {
+          if (!stopped) active.remove(circleId, record.id);
+        }, playoutMs(step.phrase));
+        return;
+      }
       timer = setTimeout(() => void fire(), minGap + Math.random() * (maxGap - minGap));
     };
 
@@ -805,7 +854,7 @@ export function createSocketServer(
         return;
       }
 
-      const { target, phrases } = parsed.data;
+      const { target, phrases, order, loop } = parsed.data;
       const bedGain = parsed.data.bedGain ?? 0.5;
       const voiceGain = parsed.data.voiceGain ?? 0.9;
       const minGap = parsed.data.minGapMs ?? 8000;
@@ -836,6 +885,8 @@ export function createSocketServer(
         if (record) {
           startWhisperscape(state.circleId, record, {
             phrases,
+            order,
+            loop,
             voiceGain,
             minGap,
             maxGap,

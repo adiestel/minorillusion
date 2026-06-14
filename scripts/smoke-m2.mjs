@@ -316,6 +316,8 @@ try {
     // Aim the whole whisperscape at the one player (like targeting a storm).
     target: { kind: "players", playerIds: [playerId] },
     phrases: ["come closer", "we have been waiting"],
+    order: "sequential", // deterministic: first phrase fires at index 0
+    loop: true,
     bedGain: 0.5,
     voiceGain: 0.9,
     minGapMs: 3000,
@@ -326,6 +328,22 @@ try {
   ok("whisperscape delivered the dissonant bed (whispers loop)");
   await waitUntil(() => latestActive.some((e) => e.id === wsStart.effectId && e.sustained && e.label === "Whispers"));
   ok("whisperscape shows in effects:active as sustained Whispers");
+
+  // The runner publishes live phrase progress on the active record — the GM panel
+  // and Stage read this to highlight the playing phrase. Sequential order makes
+  // the first fire deterministic (phrase[0] at index 0). (No TTS needed: progress
+  // is stamped before the spoken effect is built.)
+  await waitUntil(() => latestActive.some((e) => e.id === wsStart.effectId && e.whisper), 6000);
+  const wsRec = latestActive.find((e) => e.id === wsStart.effectId);
+  check(
+    wsRec?.whisper?.phrase === "come closer" &&
+      wsRec.whisper.index === 0 &&
+      wsRec.whisper.total === 2 &&
+      wsRec.whisper.remaining === 1 &&
+      wsRec.whisper.order === "sequential" &&
+      wsRec.whisper.loop === true,
+    "whisperscape publishes live phrase progress (sequential: 'come closer', 1/2, 1 left)",
+  );
 
   // REFRESH MID-WHISPERSCAPE: drop the player socket and reconnect with the SAME
   // deviceId (same identity). The bed targets this one player, so the server must
@@ -365,6 +383,22 @@ try {
   // Stop the whisperscape (cancels the runner + ends the bed).
   await gm.timeout(5000).emitWithAck("effect:stop", { effectId: wsStart.effectId });
   ok("whisperscape stopped");
+
+  // STOP-WHEN-DONE: a non-looping whisperscape tears itself down after its last
+  // phrase plays out — no manual stop needed. One phrase, tight gap, loop off.
+  const onceStart = await gm.timeout(5000).emitWithAck("whisperscape:start", {
+    target: { kind: "players", playerIds: [playerId] },
+    phrases: ["the end"],
+    order: "sequential",
+    loop: false,
+    minGapMs: 2000,
+    maxGapMs: 2000,
+  });
+  check(onceStart.ok === true, "non-looping whisperscape:start acked");
+  await waitUntil(() => latestActive.some((e) => e.id === onceStart.effectId), 5000);
+  ok("non-looping whisperscape shows active");
+  await waitUntil(() => !latestActive.some((e) => e.id === onceStart.effectId), 12000);
+  ok("non-looping whisperscape auto-stopped after its last phrase (no manual stop)");
 
   // --- TTS (live ElevenLabs) — opt-in via SMOKE_TTS=1 ---------------------
   if (process.env.SMOKE_TTS === "1") {

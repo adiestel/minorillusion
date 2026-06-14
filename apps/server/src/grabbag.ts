@@ -1,11 +1,16 @@
 /**
- * A "grab bag" (shuffle-bag) drawer: instead of picking independently at random
- * each time — which lets the same item repeat back-to-back — we shuffle the full
- * set, hand out each item exactly once, then reshuffle. Over any window the size
- * of the library every item appears once, so nothing replays on a loop.
+ * Phrase-ordering helpers for the whisperscape runner.
  *
- * Used by the whisperscape phrase runner so the spoken whispers cycle through
- * the whole library rather than landing on the same line twice in a row.
+ * `makeGrabBag` is a "grab bag" (shuffle-bag) drawer: instead of picking
+ * independently at random each time — which lets the same item repeat
+ * back-to-back — we shuffle the full set, hand out each item exactly once, then
+ * reshuffle. Over any window the size of the library every item appears once, so
+ * nothing replays on a loop.
+ *
+ * `makePhraseSequencer` builds on it to drive the runner: it yields phrases
+ * either in grab-bag random order or in the GM's sequential order, tracks the
+ * position within the current pass (for the live "now playing / N left"
+ * readout), and signals when a non-looping run has played its final phrase.
  */
 
 /** Fisher–Yates shuffle into a fresh array (input untouched). */
@@ -44,5 +49,46 @@ export function makeGrabBag<T>(items: readonly T[]): () => T | undefined {
     }
     last = bag.pop();
     return last;
+  };
+}
+
+/** What a sequencer step yields: the phrase to speak now + where it sits. */
+export interface PhraseStep {
+  /** The phrase to play this fire. */
+  phrase: string;
+  /** 0-based position within the current pass. */
+  index: number;
+  /** Library size. */
+  total: number;
+  /** Phrases left in this pass after the current one. */
+  remaining: number;
+  /** True when this is the last phrase of a non-looping run (stop after it). */
+  done: boolean;
+}
+
+/**
+ * Drive a whisperscape's phrase order. `order: "sequential"` walks the library
+ * in the given order; `order: "random"` draws from a grab bag (a full no-repeat
+ * pass before reshuffling). Each pass is `phrases.length` steps; `index` is the
+ * position within the pass and `remaining` counts those left after the current
+ * one. When `loop` is false, the step that plays the pass's last phrase reports
+ * `done: true` and the caller stops after it plays out. Returns null only for an
+ * empty library. The phrases array is read by reference (a stable snapshot).
+ */
+export function makePhraseSequencer(
+  phrases: readonly string[],
+  order: "random" | "sequential",
+  loop: boolean,
+): () => PhraseStep | null {
+  const total = phrases.length;
+  const draw = order === "random" ? makeGrabBag(phrases) : null;
+  let count = 0; // total phrases handed out across all passes
+  return () => {
+    if (total === 0) return null;
+    const index = count % total; // position within the current pass
+    const phrase = draw ? (draw() as string) : phrases[index]!;
+    count++;
+    const remaining = total - 1 - index;
+    return { phrase, index, total, remaining, done: !loop && remaining === 0 };
   };
 }

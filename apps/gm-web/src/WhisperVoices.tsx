@@ -35,12 +35,18 @@ function loadPhrases(): string[] {
 export function WhisperVoices({ players }: { players: Player[] }) {
   const [phrases, setPhrases] = useState<string[]>(() => loadPhrases());
   const [draft, setDraft] = useState("");
+  const [order, setOrder] = useState<"random" | "sequential">("random");
+  const [loop, setLoop] = useState(true);
   const [bedVol, setBedVol] = useState(0.5);
   const [voiceVol, setVoiceVol] = useState(0.9);
   const [minSec, setMinSec] = useState(8);
   const [maxSec, setMaxSec] = useState(20);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+
+  // Drag-and-drop reordering of the phrase library (native HTML5 DnD).
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [overIdx, setOverIdx] = useState<number | null>(null);
 
   // Target — like the storm, the whole whisperscape can aim at one player.
   const [targetMode, setTargetMode] = useState<"broadcast" | "players">("broadcast");
@@ -73,6 +79,19 @@ export function WhisperVoices({ players }: { players: Player[] }) {
     setDraft("");
   }
 
+  /** Move a phrase from one position to another (drag-and-drop reorder). */
+  function reorder(from: number, to: number) {
+    setPhrases((cur) => {
+      if (from === to || from < 0 || to < 0 || from >= cur.length || to >= cur.length) {
+        return cur;
+      }
+      const next = [...cur];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved as string);
+      return next;
+    });
+  }
+
   function start() {
     if (phrases.length === 0) {
       setStatus("Add at least one phrase.");
@@ -90,6 +109,8 @@ export function WhisperVoices({ players }: { players: Player[] }) {
     const req: WhisperscapeRequest = {
       target,
       phrases,
+      order,
+      loop,
       bedGain: bedVol,
       voiceGain: voiceVol,
       minGapMs: Math.round(minSec * 1000),
@@ -109,8 +130,9 @@ export function WhisperVoices({ players }: { players: Player[] }) {
     <section style={cardStyle}>
       <h2 style={sectionHeadingStyle}>Whisper voices</h2>
       <p style={hintStyle}>
-        A dissonant bed with phrases that surface at random — one ear at a time, with
-        echo + distortion. Stop it from Active effects.
+        A dissonant bed with phrases that surface as echoing whispers — one ear at a
+        time. Shuffle or play in order (drag to reorder), loop or stop once done.
+        Stop it from Active effects.
       </p>
 
       {/* Target — aim the whole whisperscape at everyone or specific players. */}
@@ -164,22 +186,86 @@ export function WhisperVoices({ players }: { players: Player[] }) {
         <p style={{ ...hintStyle, fontStyle: "italic", marginTop: space(2) }}>No phrases yet.</p>
       ) : (
         <ul style={{ listStyle: "none", margin: `${space(3)} 0 0`, padding: 0, display: "flex", flexDirection: "column", gap: space(1) }}>
-          {phrases.map((p, i) => (
-            <li key={`${i}-${p}`} style={phraseRowStyle}>
-              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {p}
-              </span>
-              <button
-                onClick={() => setPhrases((cur) => cur.filter((_, idx) => idx !== i))}
-                style={removeButtonStyle}
-                aria-label="Remove phrase"
-                title="Remove"
+          {phrases.map((p, i) => {
+            const isDragging = dragIdx === i;
+            const isOver = overIdx === i && dragIdx !== null && dragIdx !== i;
+            return (
+              <li
+                key={`${i}-${p}`}
+                draggable
+                onDragStart={(e) => {
+                  setDragIdx(i);
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  if (overIdx !== i) setOverIdx(i);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (dragIdx !== null) reorder(dragIdx, i);
+                  setDragIdx(null);
+                  setOverIdx(null);
+                }}
+                onDragEnd={() => {
+                  setDragIdx(null);
+                  setOverIdx(null);
+                }}
+                style={{
+                  ...phraseRowStyle,
+                  cursor: "grab",
+                  opacity: isDragging ? 0.4 : 1,
+                  boxShadow: isOver ? `inset 0 2px 0 ${palette.ember}` : "none",
+                }}
               >
-                ×
-              </button>
-            </li>
-          ))}
+                <span aria-hidden="true" style={gripStyle} title="Drag to reorder">
+                  ⠿
+                </span>
+                <span style={ordinalStyle}>{i + 1}</span>
+                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {p}
+                </span>
+                <button
+                  onClick={() => setPhrases((cur) => cur.filter((_, idx) => idx !== i))}
+                  style={removeButtonStyle}
+                  aria-label="Remove phrase"
+                  title="Remove"
+                >
+                  ×
+                </button>
+              </li>
+            );
+          })}
         </ul>
+      )}
+
+      {/* Playback — phrase order + repeat. Drag the rows above to set the order. */}
+      {phrases.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: space(4), marginTop: space(3) }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: space(2) }}>
+            <label style={labelStyle}>Order</label>
+            <div style={{ display: "flex", gap: space(2) }}>
+              <ToggleButton active={order === "random"} onClick={() => setOrder("random")}>
+                Shuffle
+              </ToggleButton>
+              <ToggleButton active={order === "sequential"} onClick={() => setOrder("sequential")}>
+                In order
+              </ToggleButton>
+            </div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: space(2) }}>
+            <label style={labelStyle}>Repeat</label>
+            <div style={{ display: "flex", gap: space(2) }}>
+              <ToggleButton active={loop} onClick={() => setLoop(true)}>
+                Loop
+              </ToggleButton>
+              <ToggleButton active={!loop} onClick={() => setLoop(false)}>
+                Play once
+              </ToggleButton>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Levels */}
@@ -393,6 +479,24 @@ const removeButtonStyle: React.CSSProperties = {
   cursor: "pointer",
   padding: `0 ${space(1)}`,
   flexShrink: 0,
+};
+
+const gripStyle: React.CSSProperties = {
+  flexShrink: 0,
+  color: "var(--text-dim)",
+  fontSize: "0.9rem",
+  lineHeight: 1,
+  cursor: "grab",
+  userSelect: "none",
+};
+
+const ordinalStyle: React.CSSProperties = {
+  flexShrink: 0,
+  minWidth: "1.2em",
+  textAlign: "right",
+  color: palette.parchmentDim,
+  fontSize: "0.78rem",
+  fontVariantNumeric: "tabular-nums",
 };
 
 function addButtonStyle(disabled: boolean): React.CSSProperties {

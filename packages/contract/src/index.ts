@@ -437,6 +437,28 @@ export type SendCueResult = z.infer<typeof sendCueResultSchema>;
 // effect:end reuse the id the player already holds. (M2 control rework.)
 // ---------------------------------------------------------------------------
 
+/**
+ * Live progress of a whisperscape's spoken phrases — which line is sounding now,
+ * where it sits in the current pass, and how many remain — so the GM's Active
+ * panel and Stage can highlight the playing phrase and a "N left" countdown. The
+ * server updates this on every fire and re-pushes effects:active.
+ */
+export const whisperProgressSchema = z.object({
+  /** The phrase currently sounding (highlight this one). */
+  phrase: z.string(),
+  /** 0-based position of the current phrase within the current pass. */
+  index: z.number().int().nonnegative(),
+  /** Total phrases in the library. */
+  total: z.number().int().positive(),
+  /** Phrases left in the current pass after the current one. */
+  remaining: z.number().int().nonnegative(),
+  /** How phrases are chosen this run. */
+  order: z.enum(["random", "sequential"]),
+  /** Whether it repeats after a full pass (vs. stops once done). */
+  loop: z.boolean(),
+});
+export type WhisperProgress = z.infer<typeof whisperProgressSchema>;
+
 export const activeEffectSchema = z.object({
   id: z.string().uuid(),
   kind: z.string(),
@@ -451,6 +473,9 @@ export const activeEffectSchema = z.object({
   /** ambiance only: the running scene, so the GM Stage can paint each tile's
    *  background from the authoritative registry (and seed it on reconnect). */
   scene: ambianceScene.optional(),
+  /** whisperscape only: live phrase progress (which is playing, how many left)
+   *  so the GM panel + Stage can highlight it as it sounds. */
+  whisper: whisperProgressSchema.optional(),
 });
 export type ActiveEffect = z.infer<typeof activeEffectSchema>;
 
@@ -473,16 +498,22 @@ export type MixerSet = z.infer<typeof mixerSetSchema>;
 
 // ---------------------------------------------------------------------------
 // Whisperscape — a sustained whisper ambience: the dissonant bed PLUS a library
-// of phrases that randomly fire as real (TTS) speech to a random player, like
-// thunderclaps in a storm. The fired phrases carry echo + distortion only (the
-// bed is already the ambience, so they don't re-add it). Server-orchestrated
+// of phrases that surface as real (TTS) speech to a player, like thunderclaps in
+// a storm. Phrases play either in a no-repeat grab-bag ("random") or in the
+// GM's chosen order ("sequential"), and either loop forever or stop once the
+// library is exhausted. The fired phrases carry echo + distortion only (the bed
+// is already the ambience, so they don't re-add it). Server-orchestrated
 // (mirrors the storm); stop it via effect:stop on the returned id.
 // ---------------------------------------------------------------------------
 
 export const whisperscapeRequestSchema = z.object({
   target: targetSchema,
-  /** The phrase library; one is chosen at random per fire. */
+  /** The phrase library, in the GM's order (used as-is when sequential). */
   phrases: z.array(z.string().min(1).max(300)).min(1).max(50),
+  /** How phrases are chosen: "random" (grab bag, no repeats) or "sequential". */
+  order: z.enum(["random", "sequential"]).default("random"),
+  /** Repeat after the whole library has played, or stop once done. */
+  loop: z.boolean().default(true),
   /** 0..1 level of the dissonant bed (default 0.5). */
   bedGain: z.number().min(0).max(1).optional(),
   /** 0..1 level of the spoken phrases (default 0.9). */

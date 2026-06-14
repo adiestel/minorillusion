@@ -30,6 +30,7 @@ import type {
   Player,
   Target,
   Viewport,
+  WhisperProgress,
 } from "@minorillusion/contract";
 import { palette, radius, space } from "@minorillusion/design-system";
 import { socket } from "./socket";
@@ -153,6 +154,7 @@ function useElementSize<T extends HTMLElement>(ref: React.RefObject<T | null>) {
 // ---------------------------------------------------------------------------
 
 export type SceneMap = Record<string, AmbianceScene>;
+export type WhisperMap = Record<string, WhisperProgress | undefined>;
 
 interface StageProps {
   circle: Circle;
@@ -161,6 +163,7 @@ interface StageProps {
 
 export function Stage({ circle, players }: StageProps) {
   const [sceneByPlayer, setSceneByPlayer] = useState<SceneMap>({});
+  const [whisperByPlayer, setWhisperByPlayer] = useState<WhisperMap>({});
 
   useEffect(() => {
     function onActive(payload: ActiveEffectsPayload) {
@@ -168,6 +171,8 @@ export function Stage({ circle, players }: StageProps) {
       const ambiances = payload.effects.filter(
         (e) => e.kind === "ambiance" && e.scene,
       );
+      // Whisperscapes carrying live phrase progress, for the per-tile badge.
+      const whispers = payload.effects.filter((e) => e.whisper);
       setSceneByPlayer(() => {
         const next: SceneMap = {};
         for (const p of players) {
@@ -179,6 +184,15 @@ export function Stage({ circle, players }: StageProps) {
         }
         return next;
       });
+      setWhisperByPlayer(() => {
+        const next: WhisperMap = {};
+        for (const p of players) {
+          for (const w of whispers) {
+            if (targetCovers(w.target, p.id)) next[p.id] = w.whisper;
+          }
+        }
+        return next;
+      });
     }
     socket.on("effects:active", onActive);
     return () => {
@@ -186,7 +200,14 @@ export function Stage({ circle, players }: StageProps) {
     };
   }, [circle.id, players]);
 
-  return <StageCanvas circleId={circle.id} players={players} sceneByPlayer={sceneByPlayer} />;
+  return (
+    <StageCanvas
+      circleId={circle.id}
+      players={players}
+      sceneByPlayer={sceneByPlayer}
+      whisperByPlayer={whisperByPlayer}
+    />
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -198,9 +219,15 @@ export interface StageCanvasProps {
   circleId: string;
   players: Player[];
   sceneByPlayer: SceneMap;
+  whisperByPlayer?: WhisperMap;
 }
 
-export function StageCanvas({ circleId, players, sceneByPlayer }: StageCanvasProps) {
+export function StageCanvas({
+  circleId,
+  players,
+  sceneByPlayer,
+  whisperByPlayer = {},
+}: StageCanvasProps) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const { w, h } = useElementSize(canvasRef);
 
@@ -315,6 +342,7 @@ export function StageCanvas({ circleId, players, sceneByPlayer }: StageCanvasPro
                 key={p.id}
                 player={p}
                 scene={sceneByPlayer[p.id] ?? "clear"}
+                whisper={whisperByPlayer[p.id]}
                 screenW={screen.w}
                 screenH={screen.h}
                 left={frac.fx * Math.max(0, w - box.w)}
@@ -338,6 +366,7 @@ export function StageCanvas({ circleId, players, sceneByPlayer }: StageCanvasPro
 interface PhoneTileProps {
   player: Player;
   scene: AmbianceScene;
+  whisper?: WhisperProgress;
   screenW: number;
   screenH: number;
   left: number;
@@ -349,6 +378,7 @@ interface PhoneTileProps {
 function PhoneTile({
   player,
   scene,
+  whisper,
   screenW,
   screenH,
   left,
@@ -461,6 +491,21 @@ function PhoneTile({
             background: palette.nearBlack,
           }}
         />
+        {/* Whisperscape badge — the phrase this phone is hearing + its progress.
+            The mirror is silent, so this is the only sign a whisper is sounding. */}
+        {whisper && (
+          <div style={whisperBadgeStyle}>
+            <span
+              style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+              title={whisper.phrase}
+            >
+              “{whisper.phrase}”
+            </span>
+            <span style={{ flexShrink: 0, fontStyle: "normal", opacity: 0.85, fontVariantNumeric: "tabular-nums" }}>
+              {whisper.index + 1}/{whisper.total}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Name label */}
@@ -530,6 +575,24 @@ const tableRingStyle: React.CSSProperties = {
   border: `1px solid ${palette.ash}`,
   background: `radial-gradient(ellipse at 50% 50%, ${palette.ember}14 0%, transparent 62%)`,
   boxShadow: "inset 0 0 40px rgba(0,0,0,0.4)",
+};
+
+const whisperBadgeStyle: React.CSSProperties = {
+  position: "absolute",
+  left: 0,
+  right: 0,
+  bottom: 0,
+  display: "flex",
+  alignItems: "center",
+  gap: 4,
+  padding: "3px 5px",
+  background: "linear-gradient(to top, rgba(0,0,0,0.85), rgba(0,0,0,0))",
+  color: palette.ember,
+  fontSize: 9,
+  lineHeight: 1.25,
+  fontStyle: "italic",
+  pointerEvents: "none",
+  zIndex: 1,
 };
 
 const emptyHintStyle: React.CSSProperties = {
