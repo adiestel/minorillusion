@@ -36,11 +36,16 @@ GL budget guardrails.
 - [x] **Test runner:** added `vitest` to `apps/player` (`test` script) — frontend
       logic is now covered (`pnpm test` runs contract+server+player = 114 tests).
 
-### Commit 2 — Crystal ball (hero visual #1) — via the D13 screenshot loop
-- [ ] A true-3D refracting sphere GL island that refracts what's behind it and
-      glows/thrums with mic amplitude during PTT (the M3 crystal-ball, upgraded).
-- [ ] Cheap fallback: the existing SVG ball (low-end / no-WebGL2 tier).
-- [ ] Wire into `PlayerInput` behind `useGLEnabled`; review rendered frames.
+### Commit 2 — Crystal ball (hero visual #1) — ⏸ DEFERRED ("keep the basic one for now")
+- Built a true-3D refracting-glass island (MeshTransmissionMaterial: ember core +
+  refracted wisp ring, amplitude thrum, tier damping) and iterated it via the D13
+  screenshot loop (orange-planet+green-bug → dark scrying orb). The orb look
+  didn't land for the user, so — exactly as D13 intends — it was reviewed BEFORE
+  commit and **set aside**, never wired in. The app keeps the flat **SVG** crystal
+  ball already shipped in `PlayerInput` (M3). The island + preview view were
+  removed from the tree (nothing committed); revisit later if wanted.
+- The **GL foundation stays** (committed `e9b909a`) — it's general infra the dice
+  reuse.
 
 ### Commit 3 — 3D dice (hero visual #2 + physics) — via the screenshot loop
 - [ ] Add a physics engine (decide: `@react-three/rapier`); a draggable/throwable
@@ -50,3 +55,4 @@ GL budget guardrails.
 ## Verification log
 - 2026-06-15 — M4 started. Confirmed R3F/three/drei already present + unused.
 - 2026-06-15 — Commit 1 (GL foundation): `pnpm typecheck` 5/5; `pnpm test` 114 (contract 28 + server 74 + player 12); `pnpm build` 3/3. fidelity + budget + gate hook landed; vitest added to the player.
+- 2026-06-15 — Crystal ball: built + iterated via the D13 screenshot loop, reviewed, set aside (look didn't land); island/preview removed, nothing committed. App keeps the SVG ball. Foundation retained for the dice.
