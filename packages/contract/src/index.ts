@@ -893,6 +893,159 @@ export const setInitiativeRequestSchema = z.object({
 });
 export type SetInitiativeRequest = z.infer<typeof setInitiativeRequestSchema>;
 
+// ===========================================================================
+// The intelligence layer (M6) — room transcript, LLM summaries/log, agents.
+//
+// Room audio is captured on the GM LAPTOP (D2 — foreground, powered) and chunked
+// to the server for STT (D11: Scribe is batch-friendly, so we segment into short
+// clips). Claude (behind an adapter, D11) filters cross-talk, writes session
+// summaries, and edits the log. **LLM agents are actors** (D3): a configured agent
+// (knowledge + a TTS voice) is prompted and its reply is delivered as ANY effect
+// through the existing router — no new delivery plumbing. INVIOLABLE (D10): room
+// capture is GM-initiated, disclosed, and shows a visible recording indicator;
+// the server never silently captures.
+// ===========================================================================
+
+/** One line of the running session transcript/log. */
+export const transcriptEntrySchema = z.object({
+  id: z.string().uuid(),
+  circleId: z.string().uuid(),
+  /** When the line was captured/added (ISO). */
+  at: z.string().datetime(),
+  text: z.string().max(4000),
+  /** Optional speaker label (the GM may tag lines). */
+  speaker: z.string().max(60).optional(),
+  /** How the line entered the log. */
+  source: z.enum(["capture", "manual", "agent"]),
+});
+export type TranscriptEntry = z.infer<typeof transcriptEntrySchema>;
+
+export const transcriptStateSchema = z.object({
+  circleId: z.string().uuid(),
+  /** Whether room capture is currently recording (drives the indicator/disclosure). */
+  recording: z.boolean(),
+  entries: z.array(transcriptEntrySchema),
+});
+export type TranscriptState = z.infer<typeof transcriptStateSchema>;
+
+/**
+ * GM → server: a captured room-audio chunk to transcribe + append to the log.
+ * The GM laptop records continuously and segments into short clips (~5–10s). The
+ * data URL is bounded like the M3 voice clip.
+ */
+export const transcriptChunkRequestSchema = z.object({
+  audio: z.string().min(1).max(3_000_000),
+  mimeType: z.string().max(120).optional(),
+});
+export type TranscriptChunkRequest = z.infer<typeof transcriptChunkRequestSchema>;
+
+/** GM → server: add a hand-typed log line (the guaranteed path when no STT key). */
+export const addEntryRequestSchema = z.object({
+  text: z.string().min(1).max(4000),
+  speaker: z.string().max(60).optional(),
+});
+export type AddEntryRequest = z.infer<typeof addEntryRequestSchema>;
+
+/** GM → server: edit or delete a log line (ad-hoc log editing). */
+export const editEntryRequestSchema = z.object({
+  entryId: z.string().uuid(),
+  /** New text (edit); omit with delete=true to remove the line. */
+  text: z.string().max(4000).optional(),
+  delete: z.boolean().optional(),
+});
+export type EditEntryRequest = z.infer<typeof editEntryRequestSchema>;
+
+/** A finished session summary (LLM-written). */
+export const summarySchema = z.object({
+  id: z.string().uuid(),
+  circleId: z.string().uuid(),
+  style: z.enum(["recap", "bullets", "dramatic"]),
+  text: z.string(),
+  createdAt: z.string().datetime(),
+});
+export type Summary = z.infer<typeof summarySchema>;
+
+/**
+ * GM → server: summarize the transcript (Claude filters cross-talk in-prompt).
+ * `entryIds` optionally restricts the source lines (source selection); omitted →
+ * the whole transcript.
+ */
+export const summarizeRequestSchema = z.object({
+  style: z.enum(["recap", "bullets", "dramatic"]).default("recap"),
+  entryIds: z.array(z.string().uuid()).max(2000).optional(),
+});
+export type SummarizeRequest = z.infer<typeof summarizeRequestSchema>;
+
+export const summarizeResultSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), summary: summarySchema }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+]);
+export type SummarizeResult = z.infer<typeof summarizeResultSchema>;
+
+/**
+ * An LLM agent — an actor (D3) with configured knowledge + a TTS voice. The GM
+ * prompts it; the reply is delivered as an effect (spoken or parchment).
+ */
+export const agentSchema = z.object({
+  id: z.string().uuid(),
+  circleId: z.string().uuid(),
+  name: z.string().min(1).max(60),
+  /** A short persona/knowledge brief that grounds the agent's replies. */
+  knowledge: z.string().max(4000),
+  /** Optional ElevenLabs voice id for spoken replies. */
+  voice: z.string().max(80).optional(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+export type Agent = z.infer<typeof agentSchema>;
+
+export const saveAgentRequestSchema = z.object({
+  id: z.string().uuid().optional(),
+  name: z.string().min(1).max(60),
+  knowledge: z.string().max(4000),
+  voice: z.string().max(80).optional(),
+});
+export type SaveAgentRequest = z.infer<typeof saveAgentRequestSchema>;
+
+export const saveAgentResultSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), agent: agentSchema }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+]);
+export type SaveAgentResult = z.infer<typeof saveAgentResultSchema>;
+
+export const agentsListSchema = z.object({
+  circleId: z.string().uuid(),
+  agents: z.array(agentSchema),
+});
+export type AgentsList = z.infer<typeof agentsListSchema>;
+
+/**
+ * GM → server: prompt an agent. The server asks the LLM (grounded in the agent's
+ * knowledge), then delivers the reply as an effect to the target — spoken (TTS in
+ * the agent's voice) or a parchment message — and returns the reply text to the GM.
+ */
+export const promptAgentRequestSchema = z.object({
+  agentId: z.string().uuid(),
+  prompt: z.string().min(1).max(2000),
+  deliverAs: z.enum(["voice", "message"]).default("voice"),
+  target: targetSchema,
+  /** Spooky-voice treatment for a spoken reply (mirrors the audio effect FX). */
+  whispers: z.boolean().optional(),
+  echo: z.boolean().optional(),
+});
+export type PromptAgentRequest = z.infer<typeof promptAgentRequestSchema>;
+
+export const promptAgentResultSchema = z.discriminatedUnion("ok", [
+  z.object({
+    ok: z.literal(true),
+    agentName: z.string(),
+    reply: z.string(),
+    deliveredTo: z.number().int().nonnegative(),
+  }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+]);
+export type PromptAgentResult = z.infer<typeof promptAgentResultSchema>;
+
 // ---------------------------------------------------------------------------
 // Socket.IO event maps (typed on both ends)
 // ---------------------------------------------------------------------------
@@ -925,6 +1078,12 @@ export interface ServerToClientEvents {
   "roll:result": (result: RollResult) => void;
   /** Server pushes the live initiative order to the GM(s). */
   "initiative:update": (state: InitiativeState) => void;
+  /** Server pushes the live room transcript/log to the GM(s) (M6). */
+  "transcript:update": (state: TranscriptState) => void;
+  /** Server pushes the circle's agent roster to the GM(s). */
+  "agents:list": (list: AgentsList) => void;
+  /** Server tells players whether the room is being recorded (D10 disclosure). */
+  "capture:state": (info: { recording: boolean }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -1021,6 +1180,49 @@ export interface ClientToServerEvents {
   "initiative:advance": (ack: (state: InitiativeState) => void) => void;
   /** GM clears the initiative tracker. */
   "initiative:clear": (ack: (state: InitiativeState) => void) => void;
+  /** GM toggles room recording (sets the indicator + discloses to players). */
+  "capture:set": (req: { recording: boolean }) => void;
+  /** GM sends a captured room-audio chunk; the server transcribes + appends it. */
+  "transcript:chunk": (
+    req: TranscriptChunkRequest,
+    ack: (
+      result: { ok: true; entry: TranscriptEntry | null } | { ok: false; error: string },
+    ) => void,
+  ) => void;
+  /** GM adds a hand-typed log line. */
+  "transcript:add": (
+    req: AddEntryRequest,
+    ack: (result: { ok: true; entry: TranscriptEntry }) => void,
+  ) => void;
+  /** GM edits or deletes a log line. */
+  "transcript:edit": (
+    req: EditEntryRequest,
+    ack: (result: { ok: boolean }) => void,
+  ) => void;
+  /** GM fetches the current transcript/log. */
+  "transcript:list": (ack: (state: TranscriptState) => void) => void;
+  /** GM asks Claude for a session summary of (a selection of) the transcript. */
+  "summarize": (
+    req: SummarizeRequest,
+    ack: (result: SummarizeResult) => void,
+  ) => void;
+  /** GM creates/updates an LLM agent (an actor with knowledge + a voice). */
+  "agent:save": (
+    req: SaveAgentRequest,
+    ack: (result: SaveAgentResult) => void,
+  ) => void;
+  /** GM fetches the circle's agents. */
+  "agent:list": (ack: (list: AgentsList) => void) => void;
+  /** GM deletes an agent. */
+  "agent:delete": (
+    req: { agentId: string },
+    ack: (result: { ok: boolean }) => void,
+  ) => void;
+  /** GM prompts an agent; the reply is delivered as an effect + returned to the GM. */
+  "agent:prompt": (
+    req: PromptAgentRequest,
+    ack: (result: PromptAgentResult) => void,
+  ) => void;
 }
 
 export const DEFAULT_SERVER_PORT = 3001;

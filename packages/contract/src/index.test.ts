@@ -17,9 +17,16 @@ import {
   joinResultSchema,
   messageEffectSchema,
   presenceUpdateSchema,
+  agentSchema,
+  promptAgentRequestSchema,
   proficiencyForLevel,
   rollRequestSchema,
   rollResultSchema,
+  saveAgentRequestSchema,
+  summarizeRequestSchema,
+  transcriptChunkRequestSchema,
+  transcriptEntrySchema,
+  transcriptStateSchema,
   sendCueRequestSchema,
   sendEffectRequestSchema,
   sendMessageResultSchema,
@@ -519,6 +526,62 @@ describe("D&D layer (M5)", () => {
     // turnIndex -1 (not started) is allowed; -2 is not.
     expect(
       initiativeStateSchema.safeParse({ circleId: crypto.randomUUID(), round: 0, turnIndex: -2, entries: [] }).success,
+    ).toBe(false);
+  });
+});
+
+describe("intelligence layer (M6)", () => {
+  const now = new Date().toISOString();
+
+  it("validates a transcript entry + state and rejects a bad source", () => {
+    const entry = {
+      id: crypto.randomUUID(),
+      circleId: crypto.randomUUID(),
+      at: now,
+      text: "The door creaks open.",
+      source: "capture",
+    };
+    expect(transcriptEntrySchema.safeParse(entry).success).toBe(true);
+    expect(transcriptEntrySchema.safeParse({ ...entry, source: "telepathy" }).success).toBe(false);
+    expect(
+      transcriptStateSchema.safeParse({ circleId: crypto.randomUUID(), recording: true, entries: [entry] }).success,
+    ).toBe(true);
+  });
+
+  it("validates a captured audio chunk + a summarize request", () => {
+    expect(
+      transcriptChunkRequestSchema.safeParse({ audio: "data:audio/webm;base64,AAAA", mimeType: "audio/webm" }).success,
+    ).toBe(true);
+    expect(transcriptChunkRequestSchema.safeParse({ audio: "" }).success).toBe(false);
+    expect(summarizeRequestSchema.safeParse({ style: "dramatic" }).success).toBe(true);
+    // default style applies when omitted.
+    const parsed = summarizeRequestSchema.parse({});
+    expect(parsed.style).toBe("recap");
+  });
+
+  it("validates an agent + a prompt request", () => {
+    const agent = {
+      id: crypto.randomUUID(),
+      circleId: crypto.randomUUID(),
+      name: "The Oracle",
+      knowledge: "Speaks in riddles; knows the fate of the party.",
+      voice: "voice-id",
+      createdAt: now,
+      updatedAt: now,
+    };
+    expect(agentSchema.safeParse(agent).success).toBe(true);
+    expect(saveAgentRequestSchema.safeParse({ name: "The Oracle", knowledge: "x" }).success).toBe(true);
+    expect(
+      promptAgentRequestSchema.safeParse({
+        agentId: crypto.randomUUID(),
+        prompt: "What awaits us in the crypt?",
+        deliverAs: "voice",
+        target: { kind: "broadcast" },
+      }).success,
+    ).toBe(true);
+    // an empty prompt is rejected.
+    expect(
+      promptAgentRequestSchema.safeParse({ agentId: crypto.randomUUID(), prompt: "", target: { kind: "broadcast" } }).success,
     ).toBe(false);
   });
 });
