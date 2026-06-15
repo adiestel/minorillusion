@@ -129,6 +129,11 @@ export function Consent({ onAccept, onDecline, busy = false }: ConsentProps) {
             <span style={emphasisStyle}>recorded and turned into text for the Game Master</span>
             , only while you hold it, with a recording indicator on screen the whole time.
           </p>
+          <p>
+            During the session the Game Master may{" "}
+            <span style={emphasisStyle}>record and transcribe the room&rsquo;s audio &mdash; including your voice &mdash; for the session log.</span>{" "}
+            You&rsquo;ll see a recording indicator whenever it&rsquo;s active.
+          </p>
           <p>Leaving is one tap, any time.</p>
         </div>
 

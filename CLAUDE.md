@@ -5,8 +5,8 @@
 **This file is the always-loaded anchor. Before substantive work, read the relevant docs in `docs/` — they are the source of truth and survive context clearing.**
 
 ## Status
-- **Phase:** **M5 complete** — M0–M3 shipped (scaffold/presence, parchment tracer, effect engine + soundboard + consent, player voice/text plane); **M4** GL-island foundation + the 3D dice (crystal ball deferred — kept the SVG ball); **M5** the D&D layer (server-authoritative rolls with correct modifiers, character sheets manual + best-effort DDB import, the realtime initiative tracker, GM Party tab + player dice reveal). All shipped & tested. See `docs/ROADMAP.md`.
-- **Next action:** **M6** — intelligence layer (room capture → STT transcript; Claude for transcript filtering / summaries / log editing; LLM agents as actors; smart Dissonant Whispers). See `docs/M6-PLAN.md`.
+- **Phase:** **M6 complete** — M0–M3 shipped (scaffold/presence, parchment tracer, effect engine + soundboard + consent, player voice/text plane); **M4** GL-island foundation + 3D dice (crystal ball deferred); **M5** the D&D layer (server-authoritative rolls, character sheets manual + DDB import, initiative tracker, GM Party + player dice reveal); **M6** the intelligence layer (GM room capture → STT transcript, Claude summaries/log editing behind an adapter, LLM agents-as-actors, GM Lore tab + player recording disclosure). All shipped & tested. See `docs/ROADMAP.md`.
+- **Next action:** **M7** — join ritual + ship (QR/hearth + onboarding + session-end summary delivery + player log history + the pre-submission checklist; on-device BLE/NFC, OTA, store submission are user-gated). See `docs/M7-PLAN.md`.
 - **Open user step:** physical-device pass (haptic feel + iOS audio unlock + mic/PTT recording-indicator & track-release) — verify the player on a real iPhone/Android.
 - **Build mode:** Claude implements, user reviews — working code, milestone by milestone.
 

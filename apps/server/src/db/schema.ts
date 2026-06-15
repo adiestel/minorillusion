@@ -95,6 +95,58 @@ export const characters = pgTable("characters", {
     .defaultNow(),
 });
 
+/**
+ * The M6 intelligence layer: an LLM agent — an actor (D3) with configured
+ * knowledge + an optional TTS voice. The GM prompts it; its reply is delivered as
+ * any effect through the existing router. Mirrors `agentSchema` in
+ * `packages/contract`; `src/agents.ts` maps rows → contract types (dates → ISO
+ * strings). Deleting a circle cascades its agents.
+ */
+export const agents = pgTable("agents", {
+  id: uuid("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  circleId: uuid("circle_id")
+    .notNull()
+    .references(() => circles.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  /** A short persona/knowledge brief that grounds the agent's replies. */
+  knowledge: text("knowledge").notNull(),
+  /** Optional ElevenLabs voice id for spoken replies; null = the TTS default. */
+  voice: text("voice"),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+/**
+ * The M6 intelligence layer: a finished, LLM-written session summary of (a
+ * selection of) the room transcript. Persisted per circle so a campaign keeps its
+ * recaps. Mirrors `summarySchema` in `packages/contract`; `src/summaries.ts` maps
+ * rows → contract types (dates → ISO strings). Deleting a circle cascades its
+ * summaries. The transcript itself is transient session state (in memory only,
+ * like initiative) — only the produced summaries are durable.
+ */
+export const summaries = pgTable("summaries", {
+  id: uuid("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  circleId: uuid("circle_id")
+    .notNull()
+    .references(() => circles.id, { onDelete: "cascade" }),
+  /** The narrative voice the summary was written in. */
+  style: text("style").notNull(),
+  text: text("text").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
 export type CircleRow = typeof circles.$inferSelect;
 export type PlayerRow = typeof players.$inferSelect;
 export type CharacterRow = typeof characters.$inferSelect;
+export type AgentRow = typeof agents.$inferSelect;
+export type SummaryRow = typeof summaries.$inferSelect;

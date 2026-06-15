@@ -15,6 +15,13 @@
       "when": 1781507511142,
       "tag": "0001_worthless_shatterstar",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1781508447281,
+      "tag": "0002_peaceful_the_professor",
+      "breakpoints": true
     }
   ]
 }

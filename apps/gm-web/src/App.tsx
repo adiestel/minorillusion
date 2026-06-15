@@ -15,6 +15,8 @@ import {
   useState,
 } from "react";
 import type {
+  Agent,
+  AgentsList,
   Character,
   CharactersList,
   ChannelMessage,
@@ -25,6 +27,7 @@ import type {
   Player,
   PresenceUpdate,
   RollResult,
+  TranscriptState,
 } from "@minorillusion/contract";
 import { gmTheme, palette, radius, space, themeVars } from "@minorillusion/design-system";
 import { socket } from "./socket";
@@ -35,6 +38,7 @@ import { Stage } from "./Stage";
 import { PlayersPanel } from "./PlayersPanel";
 import { Channel } from "./Channel";
 import { Party } from "./Party";
+import { Lore } from "./Lore";
 import { WhisperVoices } from "./WhisperVoices";
 import { MasterVolume } from "./MasterVolume";
 import { usePersistentState } from "./usePersistentState";
@@ -344,7 +348,7 @@ interface CirclePanelProps {
   onLeave: () => void;
 }
 
-type Tab = "effects" | "messages" | "channel" | "party" | "players";
+type Tab = "effects" | "messages" | "channel" | "party" | "lore" | "players";
 
 /** Max inbound messages retained in the GM inbox (newest kept). */
 const CHANNEL_CAP = 100;
@@ -427,6 +431,39 @@ function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
     };
   }, [circle.id]);
 
+  // --- M6 (the intelligence layer) live state, owned here like the rest. ---
+  // The server pushes transcript:update + agents:list to the GM(s); the Lore panel
+  // only renders + emits. We prime both once on open (the server also pushes them).
+  const [transcript, setTranscript] = useState<TranscriptState | null>(null);
+  const [agents, setAgents] = useState<Agent[]>([]);
+
+  useEffect(() => {
+    function onTranscript(state: TranscriptState) {
+      if (state.circleId !== circle.id) return;
+      setTranscript(state);
+    }
+    function onAgents(list: AgentsList) {
+      if (list.circleId !== circle.id) return;
+      setAgents(list.agents);
+    }
+
+    socket.on("transcript:update", onTranscript);
+    socket.on("agents:list", onAgents);
+
+    // Prime both (the server also pushes them on open/reconnect).
+    socket.emit("transcript:list", (state: TranscriptState) => {
+      if (state.circleId === circle.id) setTranscript(state);
+    });
+    socket.emit("agent:list", (list: AgentsList) => {
+      if (list.circleId === circle.id) setAgents(list.agents);
+    });
+
+    return () => {
+      socket.off("transcript:update", onTranscript);
+      socket.off("agents:list", onAgents);
+    };
+  }, [circle.id]);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: space(6) }}>
       {/* Circle header — always visible: join code, live count, leave. */}
@@ -456,7 +493,7 @@ function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
         {/* LEFT — control tabs */}
         <div style={{ flex: "1 1 360px", minWidth: 320, maxWidth: 560, display: "flex", flexDirection: "column", gap: space(5) }}>
           <div style={{ display: "flex", gap: space(1), borderBottom: `1px solid ${palette.ash}` }}>
-            {(["effects", "messages", "channel", "party", "players"] as const).map((id) => (
+            {(["effects", "messages", "channel", "party", "lore", "players"] as const).map((id) => (
               <button key={id} onClick={() => setTab(id)} style={tabButtonStyle(tab === id)}>
                 {tabLabel(id)}
                 {id === "channel" && unread > 0 && <UnreadBadge count={unread} />}
@@ -483,6 +520,10 @@ function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
               rollLog={rollLog}
               initiative={initiative}
             />
+          )}
+
+          {tab === "lore" && (
+            <Lore players={players} transcript={transcript} agents={agents} />
           )}
 
           {tab === "players" && <PlayersPanel players={players} />}
@@ -543,6 +584,7 @@ function tabLabel(id: Tab): string {
     case "messages": return "Messages";
     case "channel": return "Channel";
     case "party": return "Party";
+    case "lore": return "Lore";
     case "players": return "Players";
   }
 }

@@ -2,32 +2,41 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { Server, type Socket } from "socket.io";
 import {
+  addEntryRequestSchema,
   createCircleRequestSchema,
+  editEntryRequestSchema,
   importCharacterRequestSchema,
   joinRequestSchema,
   mixerSetSchema,
   openCircleRequestSchema,
+  promptAgentRequestSchema,
   removePlayerRequestSchema,
   renamePlayerRequestSchema,
   rollRequestSchema,
+  saveAgentRequestSchema,
   saveCharacterRequestSchema,
   sendCueRequestSchema,
   sendEffectRequestSchema,
   sendTextRequestSchema,
   sendVoiceRequestSchema,
   setInitiativeRequestSchema,
+  summarizeRequestSchema,
+  transcriptChunkRequestSchema,
   viewportSchema,
   whisperscapeMixSchema,
   whisperscapeRequestSchema,
   type ActiveEffect,
+  type AgentsList,
   type AmbianceScene,
   type ChannelMessage,
   type ClientToServerEvents,
   type DeliveredEffect,
+  type EffectSpec,
   type InitiativeState,
   type RollResult,
   type ServerToClientEvents,
   type Target,
+  type TranscriptState,
   type Viewport,
   type WhisperMix,
   type WhisperPhrase,
@@ -35,6 +44,18 @@ import {
 } from "@minorillusion/contract";
 import { CircleService } from "./circles.js";
 import { CharacterService } from "./characters.js";
+import { AgentService, agentSystemPrompt } from "./agents.js";
+import { SummaryService } from "./summaries.js";
+import {
+  addEntry,
+  deleteEntry,
+  editEntry,
+  emptyTranscript,
+  renderTranscript,
+  selectEntries,
+  setRecording,
+  summarySystemPrompt,
+} from "./transcript.js";
 import {
   advanceTurn,
   clearInitiative,
@@ -51,6 +72,7 @@ import {
 import { resolveRoll } from "./rolls.js";
 import { estimateClipMs, getTtsProvider } from "./tts.js";
 import { dataUrlToParts, getSttProvider } from "./stt.js";
+import { getLlmProvider } from "./llm.js";
 import { makePhraseSequencer } from "./grabbag.js";
 
 /**
@@ -327,11 +349,15 @@ export interface SocketServerDeps {
   service: CircleService;
   /** The M5 D&D layer: character persistence + best-effort DDB import. */
   characters: CharacterService;
+  /** The M6 intelligence layer: LLM agents-as-actors (persisted per circle). */
+  agents: AgentService;
+  /** The M6 intelligence layer: persisted, LLM-written session summaries. */
+  summaries: SummaryService;
 }
 
 export function createSocketServer(
   app: FastifyInstance,
-  { service, characters }: SocketServerDeps,
+  { service, characters, agents, summaries }: SocketServerDeps,
 ): AppServer {
   const io: AppServer = new Server(app.server, {
     cors: { origin: DEV_ORIGINS },
@@ -454,6 +480,31 @@ export function createSocketServer(
   /** Push the circle's initiative order to all of its GM sockets. */
   function pushInitiative(circleId: string, state: InitiativeState): void {
     for (const gm of gmSockets(circleId)) gm.emit("initiative:update", state);
+  }
+
+  // Per-circle room transcript/log (M6). TRANSIENT session state — like the
+  // initiative tracker, it lives in memory only (never persisted; only the
+  // LLM-written summaries are durable) and is cleared when the circle's last
+  // socket disconnects. The pure add/edit/delete rules live in transcript.ts;
+  // this map just holds the current TranscriptState. Room capture is GM-initiated
+  // + disclosed (INVIOLABLE D10): the server never captures on its own.
+  const transcripts = new Map<string, TranscriptState>();
+
+  /** The circle's current transcript (an empty, not-recording log if none yet). */
+  function getTranscript(circleId: string): TranscriptState {
+    return transcripts.get(circleId) ?? emptyTranscript(circleId);
+  }
+
+  /** Push the circle's transcript to all of its GM sockets. */
+  function pushTranscript(circleId: string, state: TranscriptState): void {
+    for (const gm of gmSockets(circleId)) gm.emit("transcript:update", state);
+  }
+
+  /** Push the circle's agent roster to all of its GM sockets. */
+  async function pushAgents(circleId: string): Promise<void> {
+    const list = await agents.listAgents(circleId);
+    const payload: AgentsList = { circleId, agents: list };
+    for (const gm of gmSockets(circleId)) gm.emit("agents:list", payload);
   }
 
   /**
@@ -781,6 +832,18 @@ export function createSocketServer(
           });
         } catch (err) {
           app.log.error({ err }, "circle:open character load failed");
+        }
+        // ...and the M6 intelligence state: the live room transcript/log + the
+        // saved agent roster, so a GM refresh restores the log + agent list.
+        socket.emit("transcript:update", getTranscript(result.circle.id));
+        try {
+          const list = await agents.listAgents(result.circle.id);
+          socket.emit("agents:list", {
+            circleId: result.circle.id,
+            agents: list,
+          });
+        } catch (err) {
+          app.log.error({ err }, "circle:open agent load failed");
         }
       } catch (err) {
         app.log.error({ err }, "circle:open failed");
@@ -1449,6 +1512,348 @@ export function createSocketServer(
       ack(next);
     });
 
+    // =====================================================================
+    // M6 — the intelligence layer: room transcript (STT), LLM summaries +
+    // log editing, and LLM agents-as-actors. All handlers are GM-only (a
+    // player/unbound socket is rejected, mirroring the effect/character
+    // handlers). Room capture is GM-initiated + disclosed (INVIOLABLE D10):
+    // the server never silently captures — it only appends a chunk the GM
+    // laptop already recorded, a hand-typed line, or an agent line.
+    // =====================================================================
+
+    // -- capture:set (GM) -> toggle room recording: set the flag, push the
+    //    transcript to GMs, AND disclose to every present player (D10 — they
+    //    see a recording indicator). No ack; it's a fire-and-forget toggle.
+    socket.on("capture:set", (req) => {
+      const state = gmState();
+      if (!state) return; // GM only
+      if (typeof req?.recording !== "boolean") return; // ignore malformed
+      const next = setRecording(getTranscript(state.circleId), req.recording);
+      transcripts.set(state.circleId, next);
+      pushTranscript(state.circleId, next);
+      // Disclose to present players so the recording indicator reflects reality.
+      for (const s of presentPlayerSockets(state.circleId).values()) {
+        s.emit("capture:state", { recording: req.recording });
+      }
+    });
+
+    // -- transcript:chunk (GM) -> a captured room-audio clip: decode + STT,
+    //    append the transcript as a {source:"capture"} line (when non-empty),
+    //    push, ack the entry. Empty transcription (silence) -> ack {entry:null};
+    //    a decode/STT failure (e.g. no key) -> a clean {ok:false} ack, never a crash.
+    socket.on("transcript:chunk", async (req, ack) => {
+      const parsed = transcriptChunkRequestSchema.safeParse(req);
+      if (!parsed.success) {
+        ack({ ok: false, error: "Invalid audio chunk." });
+        return;
+      }
+      const state = gmState();
+      if (!state) {
+        ack({ ok: false, error: "Only a GM in a circle may capture the room." });
+        return;
+      }
+      // Decode the data: URL + transcribe (STT hits the network → may throw; a
+      // missing key surfaces as a clean "STT unavailable" ack, never a crash).
+      let text: string;
+      try {
+        const { buffer, mimeType } = dataUrlToParts(parsed.data.audio);
+        const transcript = await getSttProvider().transcribe(
+          buffer,
+          parsed.data.mimeType ?? mimeType,
+        );
+        text = transcript.trim().slice(0, 4000);
+      } catch (err) {
+        ack({
+          ok: false,
+          error: err instanceof Error ? err.message : "Transcription failed.",
+        });
+        return;
+      }
+      // Silence / no speech detected → a successful no-op (nothing appended).
+      if (text === "") {
+        ack({ ok: true, entry: null });
+        return;
+      }
+      const { state: next, entry } = addEntry(getTranscript(state.circleId), {
+        text,
+        source: "capture",
+      });
+      transcripts.set(state.circleId, next);
+      pushTranscript(state.circleId, next);
+      ack({ ok: true, entry });
+    });
+
+    // -- transcript:add (GM) -> a hand-typed log line (the guaranteed path
+    //    when no STT key): append a {source:"manual"} entry, push, ack it.
+    socket.on("transcript:add", (req, ack) => {
+      const parsed = addEntryRequestSchema.safeParse(req);
+      const state = gmState();
+      if (!parsed.success || !state) return; // no error channel; ignore bad input
+      const { state: next, entry } = addEntry(getTranscript(state.circleId), {
+        text: parsed.data.text,
+        ...(parsed.data.speaker !== undefined ? { speaker: parsed.data.speaker } : {}),
+        source: "manual",
+      });
+      transcripts.set(state.circleId, next);
+      pushTranscript(state.circleId, next);
+      ack({ ok: true, entry });
+    });
+
+    // -- transcript:edit (GM) -> edit a line's text or delete it, push, ack.
+    socket.on("transcript:edit", (req, ack) => {
+      const parsed = editEntryRequestSchema.safeParse(req);
+      const state = gmState();
+      if (!parsed.success || !state) {
+        ack({ ok: false });
+        return;
+      }
+      const current = getTranscript(state.circleId);
+      let result: { state: TranscriptState; changed?: boolean; removed?: boolean };
+      if (parsed.data.delete) {
+        const r = deleteEntry(current, parsed.data.entryId);
+        result = { state: r.state, removed: r.removed };
+      } else if (parsed.data.text !== undefined) {
+        const r = editEntry(current, parsed.data.entryId, parsed.data.text);
+        result = { state: r.state, changed: r.changed };
+      } else {
+        // Neither a new text nor a delete — nothing to do.
+        ack({ ok: false });
+        return;
+      }
+      const ok = result.changed === true || result.removed === true;
+      if (ok) {
+        transcripts.set(state.circleId, result.state);
+        pushTranscript(state.circleId, result.state);
+      }
+      ack({ ok });
+    });
+
+    // -- transcript:list (GM) -> ack the current transcript state. -----------
+    socket.on("transcript:list", (ack) => {
+      const state = gmState();
+      ack(state ? getTranscript(state.circleId) : emptyTranscript(""));
+    });
+
+    // -- summarize (GM) -> ask Claude for a session summary of (a selection
+    //    of) the transcript. The system prompt filters out-of-character
+    //    cross-talk and writes in the requested style; the result is persisted
+    //    + acked. No key / LLM failure -> a clean {ok:false}, never a crash.
+    socket.on("summarize", async (req, ack) => {
+      const parsed = summarizeRequestSchema.safeParse(req);
+      if (!parsed.success) {
+        ack({ ok: false, error: "Invalid summarize request." });
+        return;
+      }
+      const state = gmState();
+      if (!state) {
+        ack({ ok: false, error: "Only a GM in a circle may summarize." });
+        return;
+      }
+      const lines = selectEntries(
+        getTranscript(state.circleId),
+        parsed.data.entryIds,
+      );
+      if (lines.length === 0) {
+        ack({ ok: false, error: "Nothing to summarize yet." });
+        return;
+      }
+      try {
+        const reply = await getLlmProvider().complete({
+          system: summarySystemPrompt(parsed.data.style),
+          prompt: renderTranscript(lines),
+          maxTokens: 1024,
+        });
+        const summary = await summaries.saveSummary(
+          state.circleId,
+          parsed.data.style,
+          reply.trim(),
+        );
+        ack({ ok: true, summary });
+      } catch (err) {
+        // No key (NullLlm) / network / provider error — surface a clean ack.
+        ack({
+          ok: false,
+          error: err instanceof Error ? err.message : "Summary failed.",
+        });
+      }
+    });
+
+    // -- agent:save (GM) -> upsert an agent, ack it, push the roster. --------
+    socket.on("agent:save", async (req, ack) => {
+      const parsed = saveAgentRequestSchema.safeParse(req);
+      if (!parsed.success) {
+        ack({ ok: false, error: "Invalid agent." });
+        return;
+      }
+      const state = gmState();
+      if (!state) {
+        ack({ ok: false, error: "Only a GM in a circle may save an agent." });
+        return;
+      }
+      try {
+        const result = await agents.saveAgent(state.circleId, parsed.data);
+        ack(result);
+        if (result.ok) await pushAgents(state.circleId);
+      } catch (err) {
+        app.log.error({ err }, "agent:save failed");
+        ack({ ok: false, error: "Failed to save agent." });
+      }
+    });
+
+    // -- agent:list (GM) -> ack the circle's agent roster. -------------------
+    socket.on("agent:list", async (ack) => {
+      const state = gmState();
+      if (!state) {
+        ack({ circleId: "", agents: [] });
+        return;
+      }
+      try {
+        const list = await agents.listAgents(state.circleId);
+        ack({ circleId: state.circleId, agents: list });
+      } catch (err) {
+        app.log.error({ err }, "agent:list failed");
+        ack({ circleId: state.circleId, agents: [] });
+      }
+    });
+
+    // -- agent:delete (GM) -> remove an agent, ack, push the roster. ---------
+    socket.on("agent:delete", async (req, ack) => {
+      const state = gmState();
+      if (!state) {
+        ack({ ok: false });
+        return;
+      }
+      try {
+        const removed = await agents.deleteAgent(state.circleId, req.agentId);
+        ack({ ok: removed });
+        if (removed) await pushAgents(state.circleId);
+      } catch (err) {
+        app.log.error({ err }, "agent:delete failed");
+        ack({ ok: false });
+      }
+    });
+
+    // -- agent:prompt (GM) -> prompt an agent (an actor, D3): ground the LLM in
+    //    the agent's knowledge, then deliver its reply as an EFFECT through the
+    //    existing router — spoken (TTS in the agent's voice, with optional
+    //    whispers/echo FX) or a brief auto-dismissing parchment — to the target's
+    //    present players, mirrored to the GM Stage, and appended to the log as an
+    //    {source:"agent"} line. Returns the reply text to the GM. No key / LLM /
+    //    TTS failure -> a clean {ok:false}, never a crash.
+    socket.on("agent:prompt", async (req, ack) => {
+      const parsed = promptAgentRequestSchema.safeParse(req);
+      if (!parsed.success) {
+        ack({ ok: false, error: "Invalid agent prompt." });
+        return;
+      }
+      const state = gmState();
+      if (!state) {
+        ack({ ok: false, error: "Only a GM in a circle may prompt an agent." });
+        return;
+      }
+
+      // Load the agent (scoped to this circle); a stale id is a clean failure.
+      let agent;
+      try {
+        agent = await agents.getAgent(state.circleId, parsed.data.agentId);
+      } catch (err) {
+        app.log.error({ err }, "agent:prompt load failed");
+        ack({ ok: false, error: "Failed to load agent." });
+        return;
+      }
+      if (!agent) {
+        ack({ ok: false, error: "Agent not found." });
+        return;
+      }
+
+      // Ask the LLM in-character (grounded in the agent's knowledge). A missing
+      // key (NullLlm) / network / provider error surfaces as a clean ack.
+      let reply: string;
+      try {
+        reply = (
+          await getLlmProvider().complete({
+            system: agentSystemPrompt(agent),
+            prompt: parsed.data.prompt,
+            maxTokens: 300,
+          })
+        ).trim();
+      } catch (err) {
+        ack({
+          ok: false,
+          error: err instanceof Error ? err.message : "Agent reply failed.",
+        });
+        return;
+      }
+      if (reply === "") {
+        ack({ ok: false, error: "Agent returned no reply." });
+        return;
+      }
+
+      // Build the delivery effect from the reply: a spoken (TTS) audio effect in
+      // the agent's voice, or a brief auto-dismissing parchment message.
+      const spec: EffectSpec =
+        parsed.data.deliverAs === "message"
+          ? {
+              kind: "message",
+              body: reply,
+              mode: "auto_dismiss",
+              autoDismissMs: 12000,
+            }
+          : {
+              kind: "audio",
+              source: {
+                via: "tts",
+                text: reply,
+                ...(agent.voice ? { voice: agent.voice } : {}),
+              },
+              ...(parsed.data.whispers ? { whispers: true } : {}),
+              ...(parsed.data.echo ? { echo: true } : {}),
+            };
+
+      // Minting a voice reply synthesizes TTS (network) → may throw; surface it.
+      let effect: DeliveredEffect;
+      try {
+        effect = await buildEffect(spec);
+      } catch (err) {
+        ack({
+          ok: false,
+          error: err instanceof Error ? err.message : "Failed to deliver reply.",
+        });
+        return;
+      }
+
+      // Fan it to the target's present players (resolve like the effect handlers).
+      const present = presentPlayerSockets(state.circleId);
+      const recipientIds = resolveTargets(parsed.data.target, [...present.keys()]);
+      const reached: string[] = [];
+      for (const playerId of recipientIds) {
+        const playerSocket = present.get(playerId);
+        if (!playerSocket) continue;
+        playerSocket.emit("effect:deliver", effect);
+        reached.push(playerId);
+      }
+      // Mirror to the GM Stage so the GM sees what the players received.
+      mirrorToGMs(state.circleId, reached, effect);
+      // Route a later ack (an auto_dismiss message isn't acked, but be consistent).
+      effectSenders.set(effect.id, socket.id);
+
+      // Append the spoken line to the log, attributed to the agent (D11 log).
+      const { state: nextLog } = addEntry(getTranscript(state.circleId), {
+        text: reply,
+        speaker: agent.name,
+        source: "agent",
+      });
+      transcripts.set(state.circleId, nextLog);
+      pushTranscript(state.circleId, nextLog);
+
+      ack({
+        ok: true,
+        agentName: agent.name,
+        reply,
+        deliveredTo: reached.length,
+      });
+    });
+
     // -- disconnect -> if a joined player, mark offline + broadcast. ----------
     socket.on("disconnect", async () => {
       const state = bindings.get(socket.id);
@@ -1456,10 +1861,12 @@ export function createSocketServer(
 
       // If that was the last socket in the circle, tear down its active-effects
       // registry so no expiry timer or storm runner leaks past an empty circle,
-      // and drop its transient initiative tracker (M5 keeps it in memory only).
+      // and drop its transient initiative tracker + room transcript (both M5/M6
+      // keep these in memory only; the durable summaries are unaffected).
       if (state && !circleHasSockets(state.circleId)) {
         active.clearCircle(state.circleId);
         initiatives.delete(state.circleId);
+        transcripts.delete(state.circleId);
       }
 
       // A player: mark offline + broadcast the thinned roster — UNLESS the same

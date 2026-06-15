@@ -114,6 +114,22 @@ function injectGlobalStyles() {
     .presence-dot {
       animation: presence-pulse 2.4s ease-in-out infinite;
     }
+
+    /* Recording indicator dot — a steady, unmistakable red pulse (safety
+       affordance, D10). Slightly stronger than the presence pulse so it reads
+       as "live" even on the near-black canvas. */
+    @keyframes recording-pulse {
+      0%, 100% { opacity: 0.45; }
+      50%      { opacity: 1; }
+    }
+
+    .recording-dot {
+      animation: recording-pulse 1.6s ease-in-out infinite;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .recording-dot { animation: none; opacity: 1; }
+    }
   `;
   document.head.appendChild(style);
 }
@@ -141,6 +157,69 @@ function Ember({ size = 240 }: EmberProps) {
 // Presence is intentionally NOT shown to players — no roster, no names, no text
 // (skeuomorphic rule, docs/DESIGN.md). If we ever want players to sense who's in
 // the circle, it'd be diegetic — small flames ringing the fire — never a list.
+
+/**
+ * Recording indicator — a small, persistent, unobtrusive affordance shown while
+ * the GM is capturing room audio (capture:state {recording:true}). It is the
+ * deliberate exception to the text-free canvas (D10 recording disclosure, like
+ * the PTT recording indicator): a clear red dot + the word "recording" so it is
+ * UNAMBIGUOUS even on the immersive near-black canvas.
+ *
+ * Top-centre, safe-area aware (the notch/Dynamic Island corner reads as a
+ * "status" zone). z-index 46: above the ember (z 1) and the Flash wash (z 45),
+ * below the parchment scrim (z 60) and the audio modal (z 100). aria-live so a
+ * screen reader announces capture starting/stopping.
+ */
+function RecordingIndicator() {
+  const wrapStyle: CSSProperties = {
+    position: "fixed",
+    top: "calc(env(safe-area-inset-top, 0px) + 10px)",
+    left: 0,
+    right: 0,
+    zIndex: 46,
+    display: "flex",
+    justifyContent: "center",
+    pointerEvents: "none",
+  };
+
+  const pillStyle: CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: space(2),
+    padding: `${space(1)} ${space(3)}`,
+    borderRadius: "999px",
+    background: "rgba(0, 0, 0, 0.55)",
+    border: "1px solid rgba(255, 70, 70, 0.45)",
+    backdropFilter: "blur(2px)",
+    WebkitBackdropFilter: "blur(2px)",
+  };
+
+  const dotStyle: CSSProperties = {
+    width: 8,
+    height: 8,
+    borderRadius: "50%",
+    background: "#ff3b30",
+    boxShadow: "0 0 6px 1px rgba(255, 59, 48, 0.8)",
+    flexShrink: 0,
+  };
+
+  const labelStyle: CSSProperties = {
+    fontSize: 11,
+    letterSpacing: "0.14em",
+    textTransform: "uppercase",
+    color: palette.bone,
+    userSelect: "none",
+  };
+
+  return (
+    <div style={wrapStyle} role="status" aria-live="polite">
+      <span style={pillStyle}>
+        <span className="recording-dot" style={dotStyle} aria-hidden="true" />
+        <span style={labelStyle}>recording</span>
+      </span>
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Reconnecting screen — shown while auto-rejoining on refresh
@@ -414,6 +493,9 @@ function App() {
   const [joining, setJoining] = useState(false);
   // True while joined AND the audio context is suspended (needs a tap to wake).
   const [audioLocked, setAudioLocked] = useState(false);
+  // True while the GM is capturing room audio (capture:state). Drives the
+  // recording indicator (D10). Reset to false whenever we're not joined.
+  const [recording, setRecording] = useState(false);
 
   // ---------------------------------------------------------------------------
   // Effect dispatcher — effect:deliver routed by effect.kind.
@@ -827,6 +909,32 @@ function App() {
   }, [appState.screen]);
 
   // ---------------------------------------------------------------------------
+  // Room-capture recording state (D10). The server emits capture:state to every
+  // present player when the GM toggles recording the room audio (which includes
+  // the players' voices). Track it so the recording indicator can show while
+  // it's active. Always listen (the server only sends it to a joined socket);
+  // the indicator itself is gated on screen === "joined" at render.
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    function onCaptureState({ recording: isRecording }: { recording: boolean }) {
+      setRecording(isRecording);
+    }
+    socket.on("capture:state", onCaptureState);
+    return () => {
+      socket.off("capture:state", onCaptureState);
+    };
+  }, []);
+
+  // Belt-and-braces: never leave the recording indicator lit once we've left the
+  // circle (eject / decline / reconnect drop), even if a final capture:state
+  // doesn't arrive. The indicator only renders while joined anyway, but this
+  // keeps the flag honest too.
+  useEffect(() => {
+    if (appState.screen !== "joined") setRecording(false);
+  }, [appState.screen]);
+
+  // ---------------------------------------------------------------------------
   // The GM removed this player: clear the session and return to the join screen
   // (don't auto-rejoin — re-entering requires the code again).
   // ---------------------------------------------------------------------------
@@ -1028,6 +1136,14 @@ function App() {
           z-indexes (idle catcher z20, sigils z25, compose/PTT z50), so it sits
           above the ember but below the parchment scrim (z60) + audio modal (z100). */}
       {appState.screen === "joined" && <PlayerInput />}
+
+      {/* Recording indicator (D10) — shown while the GM captures room audio AND
+          we're in the circle. Top-centre, safe-area aware, z 46 (above the ember
+          + Flash wash, below the parchment scrim + audio modal). The deliberate
+          text-on-canvas exception: it must be unambiguous (a clear red dot +
+          word) because it's a safety affordance. Clears when recording is
+          false or once we leave the circle. */}
+      {recording && appState.screen === "joined" && <RecordingIndicator />}
 
       {/* Persistent ambiance — BEHIND all content (z-index 0). */}
       <AmbianceLayer scene={ambiance.scene} intensity={ambiance.intensity} fadeMs={ambiance.fadeMs} />
