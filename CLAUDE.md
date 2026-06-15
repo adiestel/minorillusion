@@ -5,8 +5,8 @@
 **This file is the always-loaded anchor. Before substantive work, read the relevant docs in `docs/` — they are the source of truth and survive context clearing.**
 
 ## Status
-- **Phase:** **M3 complete** — M0 (scaffold + presence), M1 (parchment message tracer), M2 (effect engine + cheap-path effects + GM soundboard + consent-at-join), M3 (player voice/text plane: quill text + crystal-ball PTT→STT → GM Channel inbox; GM replies with any effect) all shipped & tested. See `docs/ROADMAP.md` for the authoritative status.
-- **Next action:** **M4** — showpiece GL islands (crystal-ball refraction; 3D dice with drag/throw + physics; fidelity tiering + GL budget guardrails).
+- **Phase:** **M5 complete** — M0–M3 shipped (scaffold/presence, parchment tracer, effect engine + soundboard + consent, player voice/text plane); **M4** GL-island foundation + the 3D dice (crystal ball deferred — kept the SVG ball); **M5** the D&D layer (server-authoritative rolls with correct modifiers, character sheets manual + best-effort DDB import, the realtime initiative tracker, GM Party tab + player dice reveal). All shipped & tested. See `docs/ROADMAP.md`.
+- **Next action:** **M6** — intelligence layer (room capture → STT transcript; Claude for transcript filtering / summaries / log editing; LLM agents as actors; smart Dissonant Whispers). See `docs/M6-PLAN.md`.
 - **Open user step:** physical-device pass (haptic feel + iOS audio unlock + mic/PTT recording-indicator & track-release) — verify the player on a real iPhone/Android.
 - **Build mode:** Claude implements, user reviews — working code, milestone by milestone.
 

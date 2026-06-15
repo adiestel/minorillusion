@@ -15,12 +15,16 @@ import {
   useState,
 } from "react";
 import type {
+  Character,
+  CharactersList,
   ChannelMessage,
   Circle,
   CreateCircleResult,
+  InitiativeState,
   OpenCircleResult,
   Player,
   PresenceUpdate,
+  RollResult,
 } from "@minorillusion/contract";
 import { gmTheme, palette, radius, space, themeVars } from "@minorillusion/design-system";
 import { socket } from "./socket";
@@ -30,6 +34,7 @@ import { ActiveEffects } from "./ActiveEffects";
 import { Stage } from "./Stage";
 import { PlayersPanel } from "./PlayersPanel";
 import { Channel } from "./Channel";
+import { Party } from "./Party";
 import { WhisperVoices } from "./WhisperVoices";
 import { MasterVolume } from "./MasterVolume";
 import { usePersistentState } from "./usePersistentState";
@@ -339,10 +344,13 @@ interface CirclePanelProps {
   onLeave: () => void;
 }
 
-type Tab = "effects" | "messages" | "channel" | "players";
+type Tab = "effects" | "messages" | "channel" | "party" | "players";
 
 /** Max inbound messages retained in the GM inbox (newest kept). */
 const CHANNEL_CAP = 100;
+
+/** Max resolved rolls retained in the Party tab's roll log (newest kept). */
+const ROLL_LOG_CAP = 30;
 
 function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
   const [tab, setTab] = usePersistentState<Tab>("mi.gm.tab", "effects");
@@ -377,6 +385,48 @@ function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
 
   const unread = Math.max(0, messages.length - seenCount);
 
+  // --- M5 (the D&D layer) live state, owned here like the channel inbox. ---
+  // The server pushes characters:list, roll:result, and initiative:update to the
+  // GM(s); the Party panel only renders + emits. We prime the roster once on open
+  // (the server also pushes it), and keep a short newest-first roll log.
+  const [characters, setCharacters] = useState<Character[]>([]);
+  const [rollLog, setRollLog] = useState<RollResult[]>([]);
+  const [initiative, setInitiative] = useState<InitiativeState | null>(null);
+
+  useEffect(() => {
+    function onCharacters(list: CharactersList) {
+      if (list.circleId !== circle.id) return;
+      setCharacters(list.characters);
+    }
+    function onRoll(result: RollResult) {
+      // De-dupe by id (defensive against a public + target double-deliver) and
+      // cap the log to the most recent ROLL_LOG_CAP entries.
+      setRollLog((prev) => {
+        if (prev.some((r) => r.id === result.id)) return prev;
+        return [result, ...prev].slice(0, ROLL_LOG_CAP);
+      });
+    }
+    function onInitiative(state: InitiativeState) {
+      if (state.circleId !== circle.id) return;
+      setInitiative(state);
+    }
+
+    socket.on("characters:list", onCharacters);
+    socket.on("roll:result", onRoll);
+    socket.on("initiative:update", onInitiative);
+
+    // Prime the roster (the server also pushes it on open/reconnect).
+    socket.emit("character:list", (list: CharactersList) => {
+      if (list.circleId === circle.id) setCharacters(list.characters);
+    });
+
+    return () => {
+      socket.off("characters:list", onCharacters);
+      socket.off("roll:result", onRoll);
+      socket.off("initiative:update", onInitiative);
+    };
+  }, [circle.id]);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: space(6) }}>
       {/* Circle header — always visible: join code, live count, leave. */}
@@ -406,7 +456,7 @@ function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
         {/* LEFT — control tabs */}
         <div style={{ flex: "1 1 360px", minWidth: 320, maxWidth: 560, display: "flex", flexDirection: "column", gap: space(5) }}>
           <div style={{ display: "flex", gap: space(1), borderBottom: `1px solid ${palette.ash}` }}>
-            {(["effects", "messages", "channel", "players"] as const).map((id) => (
+            {(["effects", "messages", "channel", "party", "players"] as const).map((id) => (
               <button key={id} onClick={() => setTab(id)} style={tabButtonStyle(tab === id)}>
                 {tabLabel(id)}
                 {id === "channel" && unread > 0 && <UnreadBadge count={unread} />}
@@ -425,6 +475,15 @@ function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
           {tab === "messages" && <MessageComposer players={players} />}
 
           {tab === "channel" && <Channel players={players} messages={messages} />}
+
+          {tab === "party" && (
+            <Party
+              players={players}
+              characters={characters}
+              rollLog={rollLog}
+              initiative={initiative}
+            />
+          )}
 
           {tab === "players" && <PlayersPanel players={players} />}
         </div>
@@ -483,6 +542,7 @@ function tabLabel(id: Tab): string {
     case "effects": return "Effects";
     case "messages": return "Messages";
     case "channel": return "Channel";
+    case "party": return "Party";
     case "players": return "Players";
   }
 }

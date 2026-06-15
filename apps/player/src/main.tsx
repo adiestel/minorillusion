@@ -28,12 +28,14 @@ import type {
   MessageEffect,
   AmbianceScene,
   FlashEffect,
+  RollResult,
 } from "@minorillusion/contract";
 import { playerTheme, themeVars, palette, space } from "@minorillusion/design-system";
 import { ParchmentMessage } from "./ParchmentMessage";
 import { AmbianceLayer } from "./AmbianceLayer";
 import { Heartbeat } from "./Heartbeat";
 import { Flash } from "./Flash";
+import { RollReveal } from "./RollReveal";
 import { Consent } from "./Consent";
 import { AudioUnlockModal } from "./AudioUnlockModal";
 import { PlayerInput } from "./PlayerInput";
@@ -395,6 +397,12 @@ interface FlashState {
   durationMs?: number;
 }
 
+/** Transient roll-reveal overlay (keyed by the result id; latest wins). */
+interface RollState {
+  id: string;
+  result: RollResult;
+}
+
 function App() {
   // Initialise to "reconnecting" if a stored session exists, "join" otherwise.
   const [appState, setAppState] = useState<AppState>(() =>
@@ -427,6 +435,7 @@ function App() {
   const [ambiance, setAmbiance] = useState<AmbianceState>({ scene: "clear" });
   const [heartbeat, setHeartbeat] = useState<HeartbeatState | null>(null);
   const [flash, setFlash] = useState<FlashState | null>(null);
+  const [roll, setRoll] = useState<RollState | null>(null);
 
   // --- sustained-effect registry (M2 control rework) ---
   // effectId → cleanup. A sustained effect (a standalone audio loop, or an
@@ -688,6 +697,13 @@ function App() {
     setFlash((cur) => (cur !== null && cur.id === id ? null : cur));
   }, []);
 
+  // Self-removal when a roll reveal finishes (the die has settled + dismissed).
+  const handleRollDone = useCallback((id: string) => {
+    // Latest-wins guard: only clear if this is still the showing roll, so a
+    // newer roll that arrived mid-reveal isn't yanked by the old one's onDone.
+    setRoll((cur) => (cur !== null && cur.id === id ? null : cur));
+  }, []);
+
   // Stop/clear a specific active effect on the server's say-so (M2 control
   // rework — drives the GM "Stop" / "Calm" buttons). Look the id up in the
   // sustained-cleanup registry; if found, run the cleanup and forget it. An
@@ -743,6 +759,20 @@ function App() {
     socket.on("mixer:apply", onMixer);
     return () => {
       socket.off("mixer:apply", onMixer);
+    };
+  }, []);
+
+  // Listen for roll:result — the server sends it only to a player it targets or
+  // when the roll is public, so no client-side filtering is needed. Store the
+  // latest (keyed by result id); RollReveal mounts it (rendered only while joined)
+  // and the die tumbles to the authoritative result. Latest-wins like flash.
+  useEffect(() => {
+    function onRollResult(result: RollResult) {
+      setRoll({ id: result.id, result });
+    }
+    socket.on("roll:result", onRollResult);
+    return () => {
+      socket.off("roll:result", onRollResult);
     };
   }, []);
 
@@ -1022,6 +1052,15 @@ function App() {
           durationMs={flash.durationMs}
           onDone={() => handleFlashDone(flash.id)}
         />
+      )}
+
+      {/* Transient roll reveal (M5) — the 3D d20 (or its cheap fallback) tumbling
+          to the server's authoritative result, plus a parchment readout. Above the
+          flash + PlayerInput plane (z 55), below the parchment scrim. Rendered only
+          while joined; keyed by result id so a newer roll replaces an in-flight one
+          (latest-wins). */}
+      {roll !== null && appState.screen === "joined" && (
+        <RollReveal key={roll.id} result={roll.result} onDone={handleRollDone} />
       )}
 
       {/* Parchment overlay — rendered above everything, portalled via fixed positioning */}

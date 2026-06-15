@@ -3,15 +3,19 @@ import type { FastifyInstance } from "fastify";
 import { Server, type Socket } from "socket.io";
 import {
   createCircleRequestSchema,
+  importCharacterRequestSchema,
   joinRequestSchema,
   mixerSetSchema,
   openCircleRequestSchema,
   removePlayerRequestSchema,
   renamePlayerRequestSchema,
+  rollRequestSchema,
+  saveCharacterRequestSchema,
   sendCueRequestSchema,
   sendEffectRequestSchema,
   sendTextRequestSchema,
   sendVoiceRequestSchema,
+  setInitiativeRequestSchema,
   viewportSchema,
   whisperscapeMixSchema,
   whisperscapeRequestSchema,
@@ -20,6 +24,8 @@ import {
   type ChannelMessage,
   type ClientToServerEvents,
   type DeliveredEffect,
+  type InitiativeState,
+  type RollResult,
   type ServerToClientEvents,
   type Target,
   type Viewport,
@@ -28,6 +34,13 @@ import {
   type WhisperProgress,
 } from "@minorillusion/contract";
 import { CircleService } from "./circles.js";
+import { CharacterService } from "./characters.js";
+import {
+  advanceTurn,
+  clearInitiative,
+  emptyInitiative,
+  setEntries,
+} from "./initiative.js";
 import {
   buildCue,
   buildEffect,
@@ -35,6 +48,7 @@ import {
   resolveTargets,
   type EffectClassification,
 } from "./effects.js";
+import { resolveRoll } from "./rolls.js";
 import { estimateClipMs, getTtsProvider } from "./tts.js";
 import { dataUrlToParts, getSttProvider } from "./stt.js";
 import { makePhraseSequencer } from "./grabbag.js";
@@ -311,11 +325,13 @@ class ActiveEffectRegistry {
 
 export interface SocketServerDeps {
   service: CircleService;
+  /** The M5 D&D layer: character persistence + best-effort DDB import. */
+  characters: CharacterService;
 }
 
 export function createSocketServer(
   app: FastifyInstance,
-  { service }: SocketServerDeps,
+  { service, characters }: SocketServerDeps,
 ): AppServer {
   const io: AppServer = new Server(app.server, {
     cors: { origin: DEV_ORIGINS },
@@ -423,6 +439,55 @@ export function createSocketServer(
   // The circle's live "what's running" registry, used to drive the GM panel and
   // to stop sustained effects (loops, ambiance, storms) by id.
   const active = new ActiveEffectRegistry(io, gmSockets);
+
+  // Per-circle initiative tracker (M5). TRANSIENT session state — like the
+  // effects registry, it lives in memory only (not persisted for M5) and is
+  // cleared when the circle's last socket disconnects. The pure reducer in
+  // initiative.ts owns the ordering rules; this map just holds current state.
+  const initiatives = new Map<string, InitiativeState>();
+
+  /** The circle's current initiative (an empty tracker if none started yet). */
+  function getInitiative(circleId: string): InitiativeState {
+    return initiatives.get(circleId) ?? emptyInitiative(circleId);
+  }
+
+  /** Push the circle's initiative order to all of its GM sockets. */
+  function pushInitiative(circleId: string, state: InitiativeState): void {
+    for (const gm of gmSockets(circleId)) gm.emit("initiative:update", state);
+  }
+
+  /**
+   * Fan a resolved roll out per the request's visibility (M5): ALWAYS to the
+   * circle's GM sockets (the GM log); to the target player's socket when
+   * `targetPlayerId` is set + connected (its 3D die visualizes the result); and
+   * to ALL present players when the roll is public. A player may receive it once
+   * (a public roll targeted at a player is sent to it as part of the broadcast).
+   */
+  function deliverRoll(
+    circleId: string,
+    result: RollResult,
+    isPublic: boolean,
+  ): void {
+    for (const gm of gmSockets(circleId)) gm.emit("roll:result", result);
+    const present = presentPlayerSockets(circleId);
+    const sent = new Set<string>();
+    if (isPublic) {
+      for (const [playerId, sock] of present) {
+        sock.emit("roll:result", result);
+        sent.add(playerId);
+      }
+    }
+    if (result.targetPlayerId && !sent.has(result.targetPlayerId)) {
+      present.get(result.targetPlayerId)?.emit("roll:result", result);
+    }
+  }
+
+  /** Push the circle's character roster to all of its GM sockets. */
+  async function pushCharacters(circleId: string): Promise<void> {
+    const list = await characters.listCharacters(circleId);
+    const payload = { circleId, characters: list };
+    for (const gm of gmSockets(circleId)) gm.emit("characters:list", payload);
+  }
 
   /**
    * Do two targets overlap (share at least one possible recipient)? Used to keep
@@ -705,6 +770,18 @@ export function createSocketServer(
         ack({ ok: true, circle: result.circle, players: result.players });
         // A reconnecting GM should see what is already running in the circle.
         active.pushTo(socket, result.circle.id);
+        // ...and the M5 D&D state: the saved party + the live initiative order,
+        // so a GM refresh restores the character roster + combat tracker.
+        socket.emit("initiative:update", getInitiative(result.circle.id));
+        try {
+          const list = await characters.listCharacters(result.circle.id);
+          socket.emit("characters:list", {
+            circleId: result.circle.id,
+            characters: list,
+          });
+        } catch (err) {
+          app.log.error({ err }, "circle:open character load failed");
+        }
       } catch (err) {
         app.log.error({ err }, "circle:open failed");
         ack({ ok: false, error: "Failed to open circle." });
@@ -1194,15 +1271,195 @@ export function createSocketServer(
       ack({ ok: true });
     });
 
+    // =====================================================================
+    // M5 — the D&D layer: characters, GM-called rolls, initiative. All
+    // handlers are GM-only (a player/unbound socket is rejected, mirroring
+    // the effect handlers): the GM is the system of record for the sheet,
+    // rolls, and combat order.
+    // =====================================================================
+
+    /** True iff this socket is a GM bound to a circle (no playerId). */
+    function gmState() {
+      const s = bindings.get(socket.id);
+      return s && s.playerId === undefined ? s : undefined;
+    }
+
+    // -- character:save (GM) -> upsert a sheet, ack it, push the roster. ------
+    socket.on("character:save", async (req, ack) => {
+      const parsed = saveCharacterRequestSchema.safeParse(req);
+      if (!parsed.success) {
+        ack({ ok: false, error: "Invalid character." });
+        return;
+      }
+      const state = gmState();
+      if (!state) {
+        ack({ ok: false, error: "Only a GM in a circle may save a character." });
+        return;
+      }
+      try {
+        const result = await characters.saveCharacter(state.circleId, parsed.data);
+        ack(result);
+        if (result.ok) await pushCharacters(state.circleId);
+      } catch (err) {
+        app.log.error({ err }, "character:save failed");
+        ack({ ok: false, error: "Failed to save character." });
+      }
+    });
+
+    // -- character:list (GM) -> ack the circle's roster. ---------------------
+    socket.on("character:list", async (ack) => {
+      const state = gmState();
+      if (!state) {
+        ack({ circleId: "", characters: [] });
+        return;
+      }
+      try {
+        const list = await characters.listCharacters(state.circleId);
+        ack({ circleId: state.circleId, characters: list });
+      } catch (err) {
+        app.log.error({ err }, "character:list failed");
+        ack({ circleId: state.circleId, characters: [] });
+      }
+    });
+
+    // -- character:delete (GM) -> remove a sheet, ack, push the roster. ------
+    socket.on("character:delete", async (req, ack) => {
+      const state = gmState();
+      if (!state) {
+        ack({ ok: false });
+        return;
+      }
+      try {
+        const removed = await characters.deleteCharacter(
+          state.circleId,
+          req.characterId,
+        );
+        ack({ ok: removed });
+        if (removed) await pushCharacters(state.circleId);
+      } catch (err) {
+        app.log.error({ err }, "character:delete failed");
+        ack({ ok: false });
+      }
+    });
+
+    // -- character:import (GM) -> best-effort DDB public-link import (D6). ----
+    //    Never throws out of here: importFromDdb returns a clean ok:false on any
+    //    bad-link / network / non-public / parse failure (fall back to manual).
+    socket.on("character:import", async (req, ack) => {
+      const parsed = importCharacterRequestSchema.safeParse(req);
+      if (!parsed.success) {
+        ack({ ok: false, error: "Invalid import request." });
+        return;
+      }
+      const state = gmState();
+      if (!state) {
+        ack({ ok: false, error: "Only a GM in a circle may import a character." });
+        return;
+      }
+      try {
+        const result = await characters.importFromDdb(state.circleId, parsed.data.url);
+        ack(result);
+        if (result.ok) await pushCharacters(state.circleId);
+      } catch (err) {
+        // Defensive: importFromDdb is designed not to throw, but never let an
+        // unexpected error crash the connection — surface a clean failure.
+        app.log.error({ err }, "character:import failed");
+        ack({ ok: false, error: "Import failed. Enter the sheet manually." });
+      }
+    });
+
+    // -- roll:call (GM) -> resolve a roll authoritatively, fan the result. ---
+    //    Looks up the character (if any), resolves via the pure rolls.ts math,
+    //    stamps id/createdAt/targetPlayerId, then delivers per visibility:
+    //    always to the GM(s); to the target player's die when present; to all
+    //    present players when public.
+    socket.on("roll:call", async (req, ack) => {
+      const parsed = rollRequestSchema.safeParse(req);
+      if (!parsed.success) {
+        ack({ ok: false, error: "Invalid roll request." });
+        return;
+      }
+      const state = gmState();
+      if (!state) {
+        ack({ ok: false, error: "Only a GM in a circle may call a roll." });
+        return;
+      }
+      try {
+        const character = parsed.data.characterId
+          ? ((await characters.getCharacter(
+              state.circleId,
+              parsed.data.characterId,
+            )) ?? undefined)
+          : undefined;
+        const resolved = resolveRoll(parsed.data, character);
+        const result: RollResult = {
+          ...resolved,
+          id: randomUUID(),
+          ...(parsed.data.targetPlayerId
+            ? { targetPlayerId: parsed.data.targetPlayerId }
+            : {}),
+          createdAt: new Date().toISOString(),
+        };
+        deliverRoll(state.circleId, result, parsed.data.public);
+        ack({ ok: true, result });
+      } catch (err) {
+        app.log.error({ err }, "roll:call failed");
+        ack({ ok: false, error: "Failed to resolve roll." });
+      }
+    });
+
+    // -- initiative:set (GM) -> replace the order, push it, ack the state. ---
+    socket.on("initiative:set", (req, ack) => {
+      const parsed = setInitiativeRequestSchema.safeParse(req);
+      const state = gmState();
+      if (!parsed.success || !state) {
+        // No error channel on this ack — return the unchanged/empty state.
+        ack(state ? getInitiative(state.circleId) : emptyInitiative(""));
+        return;
+      }
+      const next = setEntries(getInitiative(state.circleId), parsed.data);
+      initiatives.set(state.circleId, next);
+      pushInitiative(state.circleId, next);
+      ack(next);
+    });
+
+    // -- initiative:advance (GM) -> next turn (wrap bumps round), push, ack. --
+    socket.on("initiative:advance", (ack) => {
+      const state = gmState();
+      if (!state) {
+        ack(emptyInitiative(""));
+        return;
+      }
+      const next = advanceTurn(getInitiative(state.circleId));
+      initiatives.set(state.circleId, next);
+      pushInitiative(state.circleId, next);
+      ack(next);
+    });
+
+    // -- initiative:clear (GM) -> empty the tracker, push, ack. --------------
+    socket.on("initiative:clear", (ack) => {
+      const state = gmState();
+      if (!state) {
+        ack(emptyInitiative(""));
+        return;
+      }
+      const next = clearInitiative(getInitiative(state.circleId));
+      initiatives.set(state.circleId, next);
+      pushInitiative(state.circleId, next);
+      ack(next);
+    });
+
     // -- disconnect -> if a joined player, mark offline + broadcast. ----------
     socket.on("disconnect", async () => {
       const state = bindings.get(socket.id);
       bindings.delete(socket.id);
 
       // If that was the last socket in the circle, tear down its active-effects
-      // registry so no expiry timer or storm runner leaks past an empty circle.
+      // registry so no expiry timer or storm runner leaks past an empty circle,
+      // and drop its transient initiative tracker (M5 keeps it in memory only).
       if (state && !circleHasSockets(state.circleId)) {
         active.clearCircle(state.circleId);
+        initiatives.delete(state.circleId);
       }
 
       // A player: mark offline + broadcast the thinned roster — UNLESS the same

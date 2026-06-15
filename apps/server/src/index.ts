@@ -5,6 +5,7 @@ import cors from "@fastify/cors";
 import Fastify from "fastify";
 import { DEFAULT_SERVER_PORT } from "@minorillusion/contract";
 import { CircleService, DrizzleCirclesStore } from "./circles.js";
+import { CharacterService, DrizzleCharactersStore } from "./characters.js";
 import { runMigrations } from "./db/migrate.js";
 import { createSocketServer } from "./socket.js";
 
@@ -21,7 +22,8 @@ await runMigrations();
 
 // Wire the typed Socket.IO server onto Fastify's underlying http server.
 const service = new CircleService(new DrizzleCirclesStore());
-const io = createSocketServer(app, { service });
+const characters = new CharacterService(new DrizzleCharactersStore());
+const io = createSocketServer(app, { service, characters });
 
 app.addHook("onClose", async () => {
   await io.close();
