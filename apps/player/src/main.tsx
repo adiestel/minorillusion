@@ -36,6 +36,7 @@ import { Heartbeat } from "./Heartbeat";
 import { Flash } from "./Flash";
 import { Consent } from "./Consent";
 import { AudioUnlockModal } from "./AudioUnlockModal";
+import { PlayerInput } from "./PlayerInput";
 
 import { socket } from "./socket";
 import { deviceId } from "./deviceId";
@@ -991,6 +992,12 @@ function App() {
       ) : (
         <JoinScreen onProceed={handleProceed} error={joinError} busy={joining} />
       )}
+
+      {/* Player input grammar (M3) — quill (text) + crystal ball (voice PTT),
+          rendered ONLY while joined. A fixed-position overlay with its own
+          z-indexes (idle catcher z20, sigils z25, compose/PTT z50), so it sits
+          above the ember but below the parchment scrim (z60) + audio modal (z100). */}
+      {appState.screen === "joined" && <PlayerInput />}
 
       {/* Persistent ambiance — BEHIND all content (z-index 0). */}
       <AmbianceLayer scene={ambiance.scene} intensity={ambiance.intensity} fadeMs={ambiance.fadeMs} />

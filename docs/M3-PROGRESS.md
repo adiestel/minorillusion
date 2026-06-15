@@ -1,8 +1,9 @@
-# M3 — Player voice/text plane — progress tracker
+# M3 — Player voice/text plane — progress tracker — ✓ COMPLETE
 
-> Working doc for the M3 milestone (see `ROADMAP.md`). The inverse path: a player
-> speaks back to the GM. Updated as each piece lands; folded into `ROADMAP.md` +
-> `DECISIONS.md` when M3 is done.
+> Working log for the M3 milestone (see `ROADMAP.md`). The inverse path: a player
+> speaks back to the GM. **M3 is done** — canonical status now lives in
+> `ROADMAP.md` (M3 ✓ DONE) + `DECISIONS.md` (**D16**); this file is the detailed
+> build/verification history.
 
 ## Definition of done (from ROADMAP)
 Tap → quill/ball. Quill text → GM. Ball PTT → record → STT → GM. Channels
@@ -45,20 +46,30 @@ recorded + transcribed → disclosed at consent + a visible recording indicator.
       GM reply effect (loop closed); player-only + empty-body + malformed-clip
       guards; live STT path behind `SMOKE_STT=1`/`SMOKE_STT_CLIP`. → PASSED.
 
-### Commit 2 — M3 clients (player + GM UI) — typecheck + builds
-- [ ] **Mic capability** (`apps/player/src/capabilities/mic.ts`): web
-      MediaRecorder, feature-detected (D10 graceful degradation), releases tracks
-      on stop (OS mic indicator off). Native seam noted.
-- [ ] **Player input grammar** (`PlayerInput.tsx` + wire into `main.tsx`): tap →
-      quill/ball; quill compose → `channel:text`; ball PTT (visible recording
-      indicator) → `channel:voice`. Skeuomorphic; only appears on tap.
-- [ ] **Consent copy** update: disclose voice messages are recorded + transcribed.
-- [ ] **GM inbox** (`Channel.tsx` + a "Channel" tab): incoming messages (text +
-      voice transcript + clip playback); quick parchment reply targeting the
-      sender (reply-with-effect).
+### Commit 2 — M3 clients (player + GM UI) — typecheck + builds ✓ DONE
+- [x] **Mic capability** (`apps/player/src/capabilities/mic.ts`): web
+      MediaRecorder, feature-detected (D10 graceful degradation), releases EVERY
+      track on stop/cancel/error (OS mic indicator off). Native seam noted, no dep.
+- [x] **Player input grammar** (`PlayerInput.tsx` + wired into `main.tsx`): tap →
+      quill/ball sigils bloom from the touch point; quill compose → `channel:text`;
+      ball **press-and-hold PTT** (required visible "● recording" indicator,
+      `role="status"`) → `channel:voice`. Skeuomorphic (idle = bare ember +
+      transparent catcher); sub-350ms taps dropped; release-during-permission and
+      double-send guarded; unmount/dismiss always release the mic.
+- [x] **Consent copy** update: discloses PTT voice is recorded + transcribed, only
+      while held, with a visible indicator.
+- [x] **GM inbox** (`Channel.tsx` + a "Channel" tab w/ unread badge): incoming
+      messages (text + voice transcript + `<audio>` clip playback); inline reply
+      targeting the sender via `effect:send` (mode selector, persisted) —
+      reply-with-effect closes the loop.
 
 ## Verification log
 - 2026-06-15 — Contract additions + tests: `pnpm --filter @minorillusion/contract test` → 28 passed.
 - 2026-06-15 — Commit 1 (M3 core): `pnpm typecheck` 5/5; `pnpm test` 102 (contract 28 + server 74); `pnpm smoke:m3` → PASSED. STT adapter built by subagent to the `tts.ts` pattern.
+- 2026-06-15 — Commit 2 (M3 clients): player input grammar + mic capability + GM Channel inbox built by two parallel subagents (disjoint apps). `pnpm typecheck` 5/5; `pnpm build` 3/3 (server + both frontends); `pnpm test` 102; `pnpm smoke:m3` → PASSED. Mic-release / recording-indicator / overlay-layering reviewed by hand. **M3 complete.**
+
+## Open follow-ups (not blocking M3)
+- **Physical-device pass** (long-standing): verify mic/PTT on a real iPhone/Android — the recording indicator, the OS mic indicator going dark on release, and getUserMedia in the Capacitor WebView. The browser/PWA path is verified.
+- **Live STT** is socket-smoke-skippable; exercise once with `SMOKE_STT=1 SMOKE_STT_CLIP=/path/to/clip pnpm smoke:m3` against a real key to confirm Scribe's response shape end-to-end.
 </content>
 </invoke>

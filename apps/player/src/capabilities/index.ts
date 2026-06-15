@@ -11,6 +11,7 @@
  *
  *   • haptics — vibration (web navigator.vibrate / native @capacitor/haptics).
  *   • audio   — bundled cue + data: URL playback, with iOS unlock priming.
+ *   • mic     — player-initiated PTT capture (web getUserMedia + MediaRecorder).
  */
 
 export type { HapticsCapability } from "./haptics";
@@ -18,3 +19,6 @@ export { haptics } from "./haptics";
 
 export type { AudioHandle } from "./audio";
 export { audio } from "./audio";
+
+export type { MicCapability } from "./mic";
+export { mic } from "./mic";

@@ -15,6 +15,7 @@ import {
   useState,
 } from "react";
 import type {
+  ChannelMessage,
   Circle,
   CreateCircleResult,
   OpenCircleResult,
@@ -28,6 +29,7 @@ import { Soundboard } from "./Soundboard";
 import { ActiveEffects } from "./ActiveEffects";
 import { Stage } from "./Stage";
 import { PlayersPanel } from "./PlayersPanel";
+import { Channel } from "./Channel";
 import { WhisperVoices } from "./WhisperVoices";
 import { MasterVolume } from "./MasterVolume";
 import { usePersistentState } from "./usePersistentState";
@@ -337,11 +339,43 @@ interface CirclePanelProps {
   onLeave: () => void;
 }
 
-type Tab = "effects" | "messages" | "players";
+type Tab = "effects" | "messages" | "channel" | "players";
+
+/** Max inbound messages retained in the GM inbox (newest kept). */
+const CHANNEL_CAP = 100;
 
 function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
   const [tab, setTab] = usePersistentState<Tab>("mi.gm.tab", "effects");
   const connected = players.filter((p) => p.connected).length;
+
+  // Inbox state — App owns the live message list + the channel:message listener
+  // (the Channel panel only renders + replies). Newest-first; capped.
+  const [messages, setMessages] = useState<ChannelMessage[]>([]);
+  // Unread tracking: how many messages the GM has "seen". Reset to the current
+  // length whenever the Channel tab is open; unread is the difference.
+  const [seenCount, setSeenCount] = useState(0);
+
+  useEffect(() => {
+    function onChannelMessage(message: ChannelMessage) {
+      setMessages((prev) => {
+        // Ignore messages from other circles (defensive) and de-dupe by id.
+        if (message.circleId !== circle.id) return prev;
+        if (prev.some((m) => m.id === message.id)) return prev;
+        return [message, ...prev].slice(0, CHANNEL_CAP);
+      });
+    }
+    socket.on("channel:message", onChannelMessage);
+    return () => {
+      socket.off("channel:message", onChannelMessage);
+    };
+  }, [circle.id]);
+
+  // When the Channel tab is open, everything is considered seen.
+  useEffect(() => {
+    if (tab === "channel") setSeenCount(messages.length);
+  }, [tab, messages.length]);
+
+  const unread = Math.max(0, messages.length - seenCount);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: space(6) }}>
@@ -372,9 +406,10 @@ function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
         {/* LEFT — control tabs */}
         <div style={{ flex: "1 1 360px", minWidth: 320, maxWidth: 560, display: "flex", flexDirection: "column", gap: space(5) }}>
           <div style={{ display: "flex", gap: space(1), borderBottom: `1px solid ${palette.ash}` }}>
-            {(["effects", "messages", "players"] as const).map((id) => (
+            {(["effects", "messages", "channel", "players"] as const).map((id) => (
               <button key={id} onClick={() => setTab(id)} style={tabButtonStyle(tab === id)}>
                 {tabLabel(id)}
+                {id === "channel" && unread > 0 && <UnreadBadge count={unread} />}
               </button>
             ))}
           </div>
@@ -388,6 +423,8 @@ function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
           )}
 
           {tab === "messages" && <MessageComposer players={players} />}
+
+          {tab === "channel" && <Channel players={players} messages={messages} />}
 
           {tab === "players" && <PlayersPanel players={players} />}
         </div>
@@ -445,8 +482,42 @@ function tabLabel(id: Tab): string {
   switch (id) {
     case "effects": return "Effects";
     case "messages": return "Messages";
+    case "channel": return "Channel";
     case "players": return "Players";
   }
+}
+
+// ---------------------------------------------------------------------------
+// UnreadBadge — small ember count on the Channel tab when notes arrive while
+// the GM is on another tab.
+// ---------------------------------------------------------------------------
+
+function UnreadBadge({ count }: { count: number }) {
+  return (
+    <span
+      aria-label={`${count} unread`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        minWidth: "16px",
+        height: "16px",
+        marginLeft: space(2),
+        padding: "0 4px",
+        boxSizing: "border-box",
+        background: palette.ember,
+        color: palette.nearBlack,
+        borderRadius: radius.pill,
+        fontSize: "0.66rem",
+        fontWeight: 800,
+        lineHeight: 1,
+        fontVariantNumeric: "tabular-nums",
+        verticalAlign: "middle",
+      }}
+    >
+      {count > 99 ? "99+" : count}
+    </span>
+  );
 }
 
 function tabButtonStyle(active: boolean): React.CSSProperties {

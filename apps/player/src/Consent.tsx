@@ -124,6 +124,11 @@ export function Consent({ onAccept, onDecline, busy = false }: ConsentProps) {
             <span style={emphasisStyle}>never used unless you start them yourself</span>{" "}
             &mdash; and you&rsquo;ll always see an indicator when they&rsquo;re active.
           </p>
+          <p>
+            If you hold the crystal ball to talk, your voice is{" "}
+            <span style={emphasisStyle}>recorded and turned into text for the Game Master</span>
+            , only while you hold it, with a recording indicator on screen the whole time.
+          </p>
           <p>Leaving is one tap, any time.</p>
         </div>
 

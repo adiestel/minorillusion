@@ -5,9 +5,9 @@
 **This file is the always-loaded anchor. Before substantive work, read the relevant docs in `docs/` — they are the source of truth and survive context clearing.**
 
 ## Status
-- **Phase:** **M2 complete** — M0 (scaffold + presence), M1 (parchment message tracer), M2 (effect engine + cheap-path effects + GM soundboard + consent-at-join) all shipped & tested. See `docs/ROADMAP.md` for the authoritative status.
-- **Next action:** **M3** — player voice/text plane (quill text → GM; crystal-ball PTT → STT → GM; channels; GM replies with any effect).
-- **Open user step:** physical-device pass (haptic feel + iOS audio unlock) — verify the player on a real iPhone/Android.
+- **Phase:** **M3 complete** — M0 (scaffold + presence), M1 (parchment message tracer), M2 (effect engine + cheap-path effects + GM soundboard + consent-at-join), M3 (player voice/text plane: quill text + crystal-ball PTT→STT → GM Channel inbox; GM replies with any effect) all shipped & tested. See `docs/ROADMAP.md` for the authoritative status.
+- **Next action:** **M4** — showpiece GL islands (crystal-ball refraction; 3D dice with drag/throw + physics; fidelity tiering + GL budget guardrails).
+- **Open user step:** physical-device pass (haptic feel + iOS audio unlock + mic/PTT recording-indicator & track-release) — verify the player on a real iPhone/Android.
 - **Build mode:** Claude implements, user reviews — working code, milestone by milestone.
 
 ## Read first (the durable spec)
