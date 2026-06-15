@@ -92,7 +92,7 @@ export function WhisperVoices({ players }: { players: Player[] }) {
   // The bed only wraps ONE-OFF speech; the whisperscape already rides its own bed.
   const [fxBed, setFxBed] = usePersistentState("mi.gm.whisper.fxBed", true);
   const [fxEcho, setFxEcho] = usePersistentState("mi.gm.whisper.fxEcho", true);
-  const [echoAmt, setEchoAmt] = usePersistentState("mi.gm.whisper.echoAmt", 0.35); // moderate — keeps the voice legible
+  const [echoAmt, setEchoAmt] = usePersistentState("mi.gm.whisper.echoAmt", 0.2); // light — keeps the voice legible
   const [fxDistortion, setFxDistortion] = usePersistentState("mi.gm.whisper.fxDistortion", true);
   const [fxPan, setFxPan] = usePersistentState("mi.gm.whisper.fxPan", true);
   // Which one-off speech is in flight ("draft" or `phrase:<i>`), to show feedback.

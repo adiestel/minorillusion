@@ -103,20 +103,6 @@ export function Soundboard({ players }: SoundboardProps) {
   // --- Fade interval for looping weather beds (seconds) ---
   const [fadeSeconds, setFadeSeconds] = usePersistentState("mi.gm.sound.fadeSec", 5);
 
-  // --- Master effects volume (live; broadcast to present players) ---
-  const [effectsVol, setEffectsVol] = usePersistentState("mi.gm.sound.effectsVol", 1);
-  function changeEffectsVol(v: number) {
-    setEffectsVol(v);
-    socket.emit("mixer:set", { gain: v });
-  }
-
-  // Re-apply the saved master volume to present players on (re)mount, so a GM
-  // reload restores the level rather than silently snapping back to full.
-  useEffect(() => {
-    socket.emit("mixer:set", { gain: effectsVol });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // --- Transient status ---
   const [status, setStatus] = useState<Status>(null);
   const statusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -218,11 +204,6 @@ export function Soundboard({ players }: SoundboardProps) {
             )}
           </div>
         )}
-      </div>
-
-      {/* Master effects volume — live, affects everything the players hear. */}
-      <div style={{ marginTop: space(5) }}>
-        <VolumeSlider label="Effects volume" value={effectsVol} onChange={changeEffectsVol} />
       </div>
 
       {/* Loops — sustained; stop them from the Active panel. */}
@@ -385,35 +366,6 @@ function ToggleButton({ active, onClick, children }: ToggleButtonProps) {
 
 function plural(n: number): string {
   return n === 1 ? "player" : "players";
-}
-
-// ---------------------------------------------------------------------------
-// VolumeSlider — a labelled 0..1 level control
-// ---------------------------------------------------------------------------
-
-interface VolumeSliderProps {
-  label: string;
-  value: number;
-  onChange: (v: number) => void;
-}
-
-function VolumeSlider({ label, value, onChange }: VolumeSliderProps) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: space(3) }}>
-      <label style={{ ...labelStyle, whiteSpace: "nowrap", minWidth: 96 }}>
-        {label} {Math.round(value * 100)}%
-      </label>
-      <input
-        type="range"
-        min={0}
-        max={1}
-        step={0.05}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        style={{ flex: 1, accentColor: palette.ember, cursor: "pointer" }}
-      />
-    </div>
-  );
 }
 
 // ---------------------------------------------------------------------------

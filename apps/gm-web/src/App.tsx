@@ -29,6 +29,7 @@ import { ActiveEffects } from "./ActiveEffects";
 import { Stage } from "./Stage";
 import { PlayersPanel } from "./PlayersPanel";
 import { WhisperVoices } from "./WhisperVoices";
+import { MasterVolume } from "./MasterVolume";
 import { usePersistentState } from "./usePersistentState";
 
 // ---------------------------------------------------------------------------
@@ -391,9 +392,13 @@ function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
           {tab === "players" && <PlayersPanel players={players} />}
         </div>
 
-        {/* RIGHT — the live Stage, sticky so it stays in view while scrolling. */}
+        {/* RIGHT — the live Stage with the master volume right under the table,
+            sticky so both stay in view while scrolling. */}
         <div style={{ flex: "1 1 440px", minWidth: 340, position: "sticky", top: space(4) }}>
-          <Stage circle={circle} players={players} />
+          <div style={{ display: "flex", flexDirection: "column", gap: space(4) }}>
+            <Stage circle={circle} players={players} />
+            <MasterVolume />
+          </div>
         </div>
       </div>
     </div>
