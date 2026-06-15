@@ -21,6 +21,7 @@ import {
   type Target,
   type Viewport,
   type WhisperMix,
+  type WhisperPhrase,
   type WhisperProgress,
 } from "@minorillusion/contract";
 import { CircleService } from "./circles.js";
@@ -531,7 +532,7 @@ export function createSocketServer(
     circleId: string,
     record: ActiveEffectRecord,
     opts: {
-      phrases: string[];
+      phrases: WhisperPhrase[];
       order: "random" | "sequential";
       loop: boolean;
       echo: boolean;
@@ -555,9 +556,10 @@ export function createSocketServer(
     // ("sequential"), tracking the position within the pass for the live readout.
     const nextPhrase = makePhraseSequencer(phrases, order, loop);
 
-    // Pre-warm the TTS cache so the first fires aren't delayed by synthesis.
+    // Pre-warm the TTS cache (each phrase in its own voice) so the first fires
+    // aren't delayed by synthesis.
     const tts = getTtsProvider();
-    for (const phrase of phrases) void tts.synthesize(phrase, voice).catch(() => {});
+    for (const p of phrases) void tts.synthesize(p.text, p.voice ?? voice).catch(() => {});
 
     // Reverb tail so a clip rings out before the bed fades on a non-looping stop.
     const ECHO_TAIL_MS = 1500;
@@ -566,9 +568,12 @@ export function createSocketServer(
       if (stopped) return;
       const step = nextPhrase();
       if (step === null) return; // empty library (guarded upstream)
+      const text = step.phrase.text;
+      // Each phrase may pin its own voice; otherwise the whisperscape default.
+      const phraseVoice = step.phrase.voice ?? voice;
       // Publish progress so the GM panel + Stage highlight the playing phrase.
       active.setWhisperProgress(circleId, record.id, {
-        phrase: step.phrase,
+        phrase: text,
         index: step.index,
         total: step.total,
         remaining: step.remaining,
@@ -591,7 +596,7 @@ export function createSocketServer(
           const liveEchoAmount = record.mix?.echoAmount ?? echoAmount;
           const eff = await buildEffect({
             kind: "audio",
-            source: { via: "tts", text: step.phrase, ...(voice ? { voice } : {}) },
+            source: { via: "tts", text, ...(phraseVoice ? { voice: phraseVoice } : {}) },
             echo: liveEcho,
             ...(liveEcho && liveEchoAmount !== undefined ? { echoAmount: liveEchoAmount } : {}),
             distortion,
@@ -602,7 +607,7 @@ export function createSocketServer(
             sock.emit("effect:deliver", eff);
             mirrorToGMs(circleId, [whisperPlayerId], eff);
             clipMs = estimateClipMs(
-              step.phrase,
+              text,
               eff.kind === "audio" && eff.source.via === "data" ? eff.source.data : undefined,
             );
           }

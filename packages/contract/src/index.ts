@@ -529,10 +529,22 @@ export type MixerSet = z.infer<typeof mixerSetSchema>;
 // (mirrors the storm); stop it via effect:stop on the returned id.
 // ---------------------------------------------------------------------------
 
+/**
+ * One whisper phrase: the line to speak, plus an optional voice id that pins it
+ * to a specific voice. Omit `voice` to use the whisperscape's default voice (the
+ * request's `voice`) — so a single queue can mix voices line by line.
+ */
+export const whisperPhraseSchema = z.object({
+  text: z.string().min(1).max(300),
+  voice: z.string().max(80).optional(),
+});
+export type WhisperPhrase = z.infer<typeof whisperPhraseSchema>;
+
 export const whisperscapeRequestSchema = z.object({
   target: targetSchema,
-  /** The phrase library, in the GM's order (used as-is when sequential). */
-  phrases: z.array(z.string().min(1).max(300)).min(1).max(50),
+  /** The phrase library, in the GM's order (used as-is when sequential). Each
+   *  phrase may pin its own voice; without one it uses the default `voice`. */
+  phrases: z.array(whisperPhraseSchema).min(1).max(50),
   /** How phrases are chosen: "random" (grab bag, no repeats) or "sequential". */
   order: z.enum(["random", "sequential"]).default("random"),
   /** Repeat after the whole library has played, or stop once done. */

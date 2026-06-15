@@ -53,9 +53,9 @@ export function makeGrabBag<T>(items: readonly T[]): () => T | undefined {
 }
 
 /** What a sequencer step yields: the phrase to speak now + where it sits. */
-export interface PhraseStep {
-  /** The phrase to play this fire. */
-  phrase: string;
+export interface PhraseStep<T> {
+  /** The phrase to play this fire (a string, or a {text, voice} object). */
+  phrase: T;
   /** 0-based position within the current pass. */
   index: number;
   /** Library size. */
@@ -75,18 +75,18 @@ export interface PhraseStep {
  * `done: true` and the caller stops after it plays out. Returns null only for an
  * empty library. The phrases array is read by reference (a stable snapshot).
  */
-export function makePhraseSequencer(
-  phrases: readonly string[],
+export function makePhraseSequencer<T>(
+  phrases: readonly T[],
   order: "random" | "sequential",
   loop: boolean,
-): () => PhraseStep | null {
+): () => PhraseStep<T> | null {
   const total = phrases.length;
   const draw = order === "random" ? makeGrabBag(phrases) : null;
   let count = 0; // total phrases handed out across all passes
   return () => {
     if (total === 0) return null;
     const index = count % total; // position within the current pass
-    const phrase = draw ? (draw() as string) : phrases[index]!;
+    const phrase = draw ? (draw() as T) : phrases[index]!;
     count++;
     const remaining = total - 1 - index;
     return { phrase, index, total, remaining, done: !loop && remaining === 0 };

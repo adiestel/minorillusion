@@ -35,31 +35,53 @@ interface DragRef {
   idx: number;
 }
 
-function loadList(key: string): string[] {
+/** One phrase: the line + an optional per-phrase voice (a VOICES key). Undefined
+ *  voice means "Default" — speak it in the whisperscape's default voice. */
+interface Phrase {
+  text: string;
+  voice?: string;
+}
+
+/** Accept a stored string (legacy) or {text, voice?} and normalise to a Phrase. */
+function normalizePhrase(p: unknown): Phrase | null {
+  if (typeof p === "string") return { text: p };
+  if (p && typeof p === "object" && typeof (p as { text?: unknown }).text === "string") {
+    const o = p as { text: string; voice?: unknown };
+    return typeof o.voice === "string" ? { text: o.text, voice: o.voice } : { text: o.text };
+  }
+  return null;
+}
+
+function loadList(key: string): Phrase[] {
   try {
     const raw = localStorage.getItem(key);
     const parsed = raw ? (JSON.parse(raw) as unknown) : [];
-    return Array.isArray(parsed) ? parsed.filter((p): p is string => typeof p === "string") : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(normalizePhrase).filter((p): p is Phrase => p !== null);
   } catch {
     return [];
   }
 }
 
 /**
- * The GM voice catalog — which ElevenLabs voice speaks. "Voice 1" carries no id
- * so the server resolves its default (the ELEVENLABS_VOICE_ID override, else the
- * built-in), keeping that override working; the rest pin an explicit voice id.
- * Add new voices here — the chosen id rides every spoken line (one-off + scape).
+ * The GM voice catalog — which ElevenLabs voice speaks. Each carries an explicit
+ * id so a phrase can pin a specific voice (per-phrase override). Add new voices
+ * here; "Voice 1" is the project default. The chosen id rides every spoken line.
  */
 interface VoiceOption {
   key: string;
   label: string;
-  id?: string;
+  id: string;
 }
 const VOICES: VoiceOption[] = [
-  { key: "voice1", label: "Voice 1 (default)" },
+  { key: "voice1", label: "Voice 1 (default)", id: "NNlPuk2Pv2RnraA6G8yp" },
   { key: "voice2", label: "Voice 2", id: "6sFKzaJr574YWVu4UuJF" },
 ];
+
+/** Resolve a VOICES key to its voice id (undefined for an unknown/empty key). */
+function voiceIdOf(key: string | undefined): string | undefined {
+  return key ? VOICES.find((v) => v.key === key)?.id : undefined;
+}
 
 function loadVoiceKey(): string {
   try {
@@ -73,8 +95,8 @@ function loadVoiceKey(): string {
 export function WhisperVoices({ players }: { players: Player[] }) {
   // Two lists: "loop" plays as the whisperscape ambience; "parked" is storage —
   // kept on hand but NOT looped (▶ still plays a parked line manually).
-  const [loopPhrases, setLoopPhrases] = useState<string[]>(() => loadList(STORE_KEY));
-  const [parkedPhrases, setParkedPhrases] = useState<string[]>(() => loadList(PARK_KEY));
+  const [loopPhrases, setLoopPhrases] = useState<Phrase[]>(() => loadList(STORE_KEY));
+  const [parkedPhrases, setParkedPhrases] = useState<Phrase[]>(() => loadList(PARK_KEY));
   const [draft, setDraft] = useState("");
   // Settings persist across reloads so the GM doesn't re-dial them each session.
   const [order, setOrder] = usePersistentState<"random" | "sequential">("mi.gm.whisper.order", "random");
@@ -151,13 +173,19 @@ export function WhisperVoices({ players }: { players: Player[] }) {
   function addPhrase() {
     const t = draft.trim();
     if (t.length === 0 || loopPhrases.length >= 50) return;
-    setLoopPhrases((p) => [...p, t.slice(0, 300)]);
+    setLoopPhrases((p) => [...p, { text: t.slice(0, 300) }]);
     setDraft("");
   }
 
   function removeFrom(list: ListId, i: number) {
     const setter = list === "loop" ? setLoopPhrases : setParkedPhrases;
     setter((cur) => cur.filter((_, idx) => idx !== i));
+  }
+
+  /** Set (or clear) the per-phrase voice for one row. */
+  function setPhraseVoice(list: ListId, i: number, voice: string | undefined) {
+    const setter = list === "loop" ? setLoopPhrases : setParkedPhrases;
+    setter((cur) => cur.map((p, idx) => (idx === i ? { text: p.text, ...(voice ? { voice } : {}) } : p)));
   }
 
   function endDrag() {
@@ -208,8 +236,9 @@ export function WhisperVoices({ players }: { players: Player[] }) {
     };
   }
 
-  /** Speak one line immediately (one-off TTS) with the current Voice FX. */
-  function fireSpeak(text: string, id: string) {
+  /** Speak one line immediately (one-off TTS) with the current Voice FX. The
+   *  voiceId overrides the default voice (a phrase's pinned voice via its ▶). */
+  function fireSpeak(text: string, id: string, voiceId?: string) {
     const t = text.trim();
     if (t.length === 0) return;
     if (!targetReady) {
@@ -217,12 +246,13 @@ export function WhisperVoices({ players }: { players: Player[] }) {
       return;
     }
     setPlayId(id);
+    const useVoice = voiceId ?? selectedVoiceId;
     const spec: EffectSpec = {
       kind: "audio",
       source: {
         via: "tts",
         text: t.slice(0, 600),
-        ...(selectedVoiceId ? { voice: selectedVoiceId } : {}),
+        ...(useVoice ? { voice: useVoice } : {}),
       },
       gain: voiceVol,
       ...voiceFx(),
@@ -250,7 +280,11 @@ export function WhisperVoices({ players }: { players: Player[] }) {
     setBusy(true);
     const req: WhisperscapeRequest = {
       target: buildTarget(),
-      phrases: loopPhrases,
+      // Each phrase carries its own voice id if pinned; else the default `voice`.
+      phrases: loopPhrases.map((p) => {
+        const id = voiceIdOf(p.voice);
+        return { text: p.text, ...(id ? { voice: id } : {}) };
+      }),
       order,
       loop,
       // The Whispers-bed toggle drives the looping ambience here too (off → only
@@ -279,7 +313,7 @@ export function WhisperVoices({ players }: { players: Player[] }) {
   /** Render one phrase list (looping or storage) with cross-list drag-and-drop. */
   function renderSection(
     list: ListId,
-    items: string[],
+    items: Phrase[],
     label: string,
     hint: string,
     showOrdinals: boolean,
@@ -319,7 +353,7 @@ export function WhisperVoices({ players }: { players: Player[] }) {
               const isOver = drag !== null && over?.list === list && over.idx === i && !isDragging;
               return (
                 <li
-                  key={`${list}-${i}-${p}`}
+                  key={`${list}-${i}-${p.text}`}
                   draggable
                   onDragStart={(e) => {
                     setDrag({ list, idx: i });
@@ -349,11 +383,27 @@ export function WhisperVoices({ players }: { players: Player[] }) {
                   </span>
                   {showOrdinals && <span style={ordinalStyle}>{i + 1}</span>}
                   <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {p}
+                    {p.text}
                   </span>
+                  <select
+                    draggable={false}
+                    value={p.voice ?? ""}
+                    onChange={(e) => setPhraseVoice(list, i, e.target.value || undefined)}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    style={rowSelectStyle}
+                    title="Voice for this phrase (Default = the whisperscape voice)"
+                    aria-label="Phrase voice"
+                  >
+                    <option value="">Default</option>
+                    {VOICES.map((v) => (
+                      <option key={v.key} value={v.key}>
+                        {v.label}
+                      </option>
+                    ))}
+                  </select>
                   <button
                     draggable={false}
-                    onClick={() => fireSpeak(p, id)}
+                    onClick={() => fireSpeak(p.text, id, voiceIdOf(p.voice) ?? selectedVoiceId)}
                     disabled={!targetReady || playId === id}
                     style={playButtonStyle(!targetReady || playId === id)}
                     aria-label="Play this phrase now"
@@ -385,8 +435,9 @@ export function WhisperVoices({ players }: { players: Player[] }) {
       <p style={hintStyle}>
         A dissonant bed with phrases that surface as echoing whispers — one ear at a
         time. Phrases <em>in the loop</em> play as the ambience; drag any to{" "}
-        <em>storage</em> to keep it on hand without looping (▶ still plays it). Type
-        to add or speak now; Voice FX colour every line. Stop it from Active effects.
+        <em>storage</em> to keep it on hand without looping (▶ still plays it). Each
+        phrase can speak in its own voice (or the default). Type to add or speak now;
+        Voice FX colour every line. Stop it from Active effects.
       </p>
 
       {/* Target — aim the whole whisperscape at everyone or specific players. */}
@@ -749,6 +800,20 @@ const selectStyle: React.CSSProperties = {
   borderRadius: radius.md,
   padding: `${space(2)} ${space(3)}`,
   fontSize: "0.9rem",
+  fontFamily: "var(--font)",
+  outline: "none",
+  cursor: "pointer",
+};
+
+const rowSelectStyle: React.CSSProperties = {
+  flexShrink: 0,
+  maxWidth: 100,
+  background: "var(--surface)",
+  color: "var(--text-dim)",
+  border: `1px solid ${palette.ash}`,
+  borderRadius: radius.sm,
+  padding: "2px 4px",
+  fontSize: "0.72rem",
   fontFamily: "var(--font)",
   outline: "none",
   cursor: "pointer",

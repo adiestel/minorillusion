@@ -315,7 +315,8 @@ try {
   const wsStart = await gm.timeout(5000).emitWithAck("whisperscape:start", {
     // Aim the whole whisperscape at the one player (like targeting a storm).
     target: { kind: "players", playerIds: [playerId] },
-    phrases: ["come closer", "we have been waiting"],
+    // The second phrase pins voice 2, exercising per-phrase voices in one queue.
+    phrases: [{ text: "come closer" }, { text: "we have been waiting", voice: "voice-2-id" }],
     order: "sequential", // deterministic: first phrase fires at index 0
     loop: true,
     bedGain: 0.5,
@@ -406,7 +407,7 @@ try {
   // phrase plays out — no manual stop needed. One phrase, tight gap, loop off.
   const onceStart = await gm.timeout(5000).emitWithAck("whisperscape:start", {
     target: { kind: "players", playerIds: [playerId] },
-    phrases: ["the end"],
+    phrases: [{ text: "the end" }],
     order: "sequential",
     loop: false,
     minGapMs: 2000,
@@ -425,7 +426,7 @@ try {
   player.on("effect:deliver", noBedCollector);
   const noBed = await gm.timeout(5000).emitWithAck("whisperscape:start", {
     target: { kind: "players", playerIds: [playerId] },
-    phrases: ["silence"],
+    phrases: [{ text: "silence" }],
     bed: false,
     minGapMs: 2000,
     maxGapMs: 2000,
