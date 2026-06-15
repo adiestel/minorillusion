@@ -596,20 +596,20 @@ class WebAudio implements AudioCapability {
 
         // Echo: a feedback delay mixed with the dry signal (operates on whatever
         // `tail` currently is — the distorted signal when distortion is on). The
-        // amount (0..1, default ~0.4) scales the feedback (number of repeats) and
-        // the wet level (how loud the echoes are vs the dry voice) — low keeps the
-        // words legible, high smears them.
-        if (opts.echo) {
-          const amt = Math.min(1, Math.max(0, opts.echoAmount ?? 0.4));
+        // amount (0..1, default ~0.4) scales feedback (repeats) and wet (echo
+        // loudness vs dry) from 0 = fully dry to heavy. At 0 we skip the network
+        // entirely so the voice is clean (no residual echo floor).
+        const echoAmt = Math.min(1, Math.max(0, opts.echoAmount ?? 0.4));
+        if (opts.echo && echoAmt > 0) {
           const src = tail;
           const merge = ctx.createGain();
           src.connect(merge); // dry
           const delay = ctx.createDelay(1.0);
           delay.delayTime.value = 0.28;
           const fb = ctx.createGain();
-          fb.gain.value = 0.1 + amt * 0.3; // 0.10 (one soft tap) … 0.40 (long tail)
+          fb.gain.value = echoAmt * 0.42; // 0 (none) … 0.42 (long tail)
           const wet = ctx.createGain();
-          wet.gain.value = 0.12 + amt * 0.43; // 0.12 (subtle) … 0.55 (current heavy)
+          wet.gain.value = echoAmt * 0.6; // 0 (dry) … 0.60 (heavy)
           src.connect(delay);
           delay.connect(fb);
           fb.connect(delay); // feedback loop
