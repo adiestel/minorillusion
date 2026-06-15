@@ -489,14 +489,17 @@ export function WhisperVoices({ players }: { players: Player[] }) {
         </div>
       )}
 
-      {/* Voice — which TTS voice speaks (one-off speech + the whisperscape). */}
+      {/* Voice — the default TTS voice (one-off speech + any phrase set to
+          "Default"). A dropdown so more voices slot in cleanly later. */}
       <label style={{ ...labelStyle, marginTop: space(4) }}>Voice</label>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: space(2), marginTop: space(2) }}>
-        {VOICES.map((v) => (
-          <ToggleButton key={v.key} active={voiceKey === v.key} onClick={() => setVoiceKey(v.key)}>
-            {v.label}
-          </ToggleButton>
-        ))}
+      <div style={{ marginTop: space(2) }}>
+        <select value={voiceKey} onChange={(e) => setVoiceKey(e.target.value)} style={selectStyle}>
+          {VOICES.map((v) => (
+            <option key={v.key} value={v.key}>
+              {v.label}
+            </option>
+          ))}
+        </select>
       </div>
 
       {/* Voice FX — colours every spoken line: Play now, a phrase's ▶, and the
@@ -737,6 +740,18 @@ const removeButtonStyle: React.CSSProperties = {
   cursor: "pointer",
   padding: `0 ${space(1)}`,
   flexShrink: 0,
+};
+
+const selectStyle: React.CSSProperties = {
+  background: "var(--bg)",
+  color: "var(--text)",
+  border: `1px solid ${palette.ash}`,
+  borderRadius: radius.md,
+  padding: `${space(2)} ${space(3)}`,
+  fontSize: "0.9rem",
+  fontFamily: "var(--font)",
+  outline: "none",
+  cursor: "pointer",
 };
 
 const emptyDropStyle: React.CSSProperties = {
