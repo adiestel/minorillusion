@@ -502,6 +502,7 @@ export function createSocketServer(
       order: "random" | "sequential";
       loop: boolean;
       echo: boolean;
+      echoAmount?: number;
       distortion: boolean;
       pan: boolean;
       voiceGain: number;
@@ -513,7 +514,7 @@ export function createSocketServer(
   ): void {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const { phrases, order, loop, echo, distortion, pan, voiceGain, minGap, maxGap, voice, bedId } =
+    const { phrases, order, loop, echo, echoAmount, distortion, pan, voiceGain, minGap, maxGap, voice, bedId } =
       opts;
 
     // Phrase order: a no-repeat grab bag ("random") or the GM's order
@@ -555,6 +556,7 @@ export function createSocketServer(
             kind: "audio",
             source: { via: "tts", text: step.phrase, ...(voice ? { voice } : {}) },
             echo,
+            ...(echoAmount !== undefined ? { echoAmount } : {}),
             distortion,
             pan,
             gain: voiceGain,
@@ -866,7 +868,7 @@ export function createSocketServer(
         return;
       }
 
-      const { target, phrases, order, loop, echo, distortion, pan } = parsed.data;
+      const { target, phrases, order, loop, echo, echoAmount, distortion, pan } = parsed.data;
       const bedGain = parsed.data.bedGain ?? 0.5;
       const voiceGain = parsed.data.voiceGain ?? 0.9;
       const minGap = parsed.data.minGapMs ?? 8000;
@@ -900,6 +902,7 @@ export function createSocketServer(
             order,
             loop,
             echo,
+            ...(echoAmount !== undefined ? { echoAmount } : {}),
             distortion,
             pan,
             voiceGain,

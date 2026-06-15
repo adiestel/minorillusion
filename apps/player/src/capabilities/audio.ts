@@ -87,6 +87,8 @@ export interface VoiceOptions {
   gain?: number;
   /** Add a feedback echo. */
   echo?: boolean;
+  /** 0..1 echo intensity (feedback + wet); lower stays intelligible (default ~0.4). */
+  echoAmount?: number;
   /** Grit + a hollow band-pass — a degraded, unnatural timbre. */
   distortion?: boolean;
   /** Slowly sweep the voice L↔R. */
@@ -560,17 +562,21 @@ class WebAudio implements AudioCapability {
         }
 
         // Echo: a feedback delay mixed with the dry signal (operates on whatever
-        // `tail` currently is — the distorted signal when distortion is on).
+        // `tail` currently is — the distorted signal when distortion is on). The
+        // amount (0..1, default ~0.4) scales the feedback (number of repeats) and
+        // the wet level (how loud the echoes are vs the dry voice) — low keeps the
+        // words legible, high smears them.
         if (opts.echo) {
+          const amt = Math.min(1, Math.max(0, opts.echoAmount ?? 0.4));
           const src = tail;
           const merge = ctx.createGain();
           src.connect(merge); // dry
           const delay = ctx.createDelay(1.0);
           delay.delayTime.value = 0.28;
           const fb = ctx.createGain();
-          fb.gain.value = 0.34;
+          fb.gain.value = 0.1 + amt * 0.3; // 0.10 (one soft tap) … 0.40 (long tail)
           const wet = ctx.createGain();
-          wet.gain.value = 0.55;
+          wet.gain.value = 0.12 + amt * 0.43; // 0.12 (subtle) … 0.55 (current heavy)
           src.connect(delay);
           delay.connect(fb);
           fb.connect(delay); // feedback loop

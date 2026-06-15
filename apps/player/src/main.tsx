@@ -527,6 +527,7 @@ function App() {
       o: {
         whispers: boolean;
         echo: boolean;
+        echoAmount?: number;
         distortion: boolean;
         pan: boolean;
         gain?: number;
@@ -542,6 +543,7 @@ function App() {
         voice = audio.playVoice(data, {
           gain: o.gain,
           echo: o.echo,
+          echoAmount: o.echoAmount,
           distortion: o.distortion,
           pan: o.pan,
           onEnded: () => {
@@ -581,6 +583,7 @@ function App() {
               playSpookyVoice(effect.id, effect.source.data, {
                 whispers: effect.whispers === true,
                 echo: effect.echo === true,
+                echoAmount: effect.echoAmount,
                 distortion: effect.distortion === true,
                 pan: effect.pan === true,
                 gain: effect.gain,

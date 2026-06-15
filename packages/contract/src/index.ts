@@ -232,11 +232,15 @@ export type AudioSourceSpec = z.infer<typeof audioSourceSpecSchema>;
  * Spooky voice treatment for a spoken (TTS) effect. `whispers` wraps it in the
  * dissonant-whispers bed (fades in 2s before, out 2s after the speech); `echo`
  * adds a feedback echo; `pan` slowly sweeps it L↔R. `whisperGain` sets the bed
- * level independently of the voice (`gain`). The player applies these.
+ * level independently of the voice (`gain`). `echoAmount` (0..1) scales the echo
+ * intensity (feedback + wet level) — lower keeps the voice intelligible; the
+ * player uses a moderate default when echo is on but no amount is given. The
+ * player applies these.
  */
 const voiceFxFields = {
   whispers: z.boolean().optional(),
   echo: z.boolean().optional(),
+  echoAmount: z.number().min(0).max(1).optional(),
   distortion: z.boolean().optional(),
   pan: z.boolean().optional(),
   whisperGain: z.number().min(0).max(1).optional(),
@@ -517,6 +521,8 @@ export const whisperscapeRequestSchema = z.object({
   /** Voice FX applied to the spoken phrases (the bed is the ambience already, so
    *  phrases never re-add it). Mirror the GM's Voice FX toggles. */
   echo: z.boolean().default(true),
+  /** 0..1 echo intensity (feedback + wet); lower keeps the voice intelligible. */
+  echoAmount: z.number().min(0).max(1).optional(),
   distortion: z.boolean().default(true),
   pan: z.boolean().default(true),
   /** 0..1 level of the dissonant bed (default 0.5). */

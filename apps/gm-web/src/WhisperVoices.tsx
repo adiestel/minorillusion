@@ -90,6 +90,7 @@ export function WhisperVoices({ players }: { players: Player[] }) {
   // The bed only wraps ONE-OFF speech; the whisperscape already rides its own bed.
   const [fxBed, setFxBed] = useState(true);
   const [fxEcho, setFxEcho] = useState(true);
+  const [echoAmt, setEchoAmt] = useState(0.35); // moderate — keeps the voice legible
   const [fxDistortion, setFxDistortion] = useState(true);
   const [fxPan, setFxPan] = useState(true);
   // Which one-off speech is in flight ("draft" or `phrase:<i>`), to show feedback.
@@ -198,7 +199,7 @@ export function WhisperVoices({ players }: { players: Player[] }) {
   function voiceFx() {
     return {
       ...(fxBed ? { whispers: true, whisperGain: bedVol } : {}),
-      ...(fxEcho ? { echo: true } : {}),
+      ...(fxEcho ? { echo: true, echoAmount: echoAmt } : {}),
       ...(fxDistortion ? { distortion: true } : {}),
       ...(fxPan ? { pan: true } : {}),
     };
@@ -251,6 +252,7 @@ export function WhisperVoices({ players }: { players: Player[] }) {
       loop,
       // The whisperscape rides its own bed, so only echo/distortion/pan apply.
       echo: fxEcho,
+      ...(fxEcho ? { echoAmount: echoAmt } : {}),
       distortion: fxDistortion,
       pan: fxPan,
       bedGain: bedVol,
@@ -510,6 +512,13 @@ export function WhisperVoices({ players }: { players: Player[] }) {
           Pan
         </ToggleButton>
       </div>
+
+      {/* Echo intensity — lower keeps the words legible; only when Echo is on. */}
+      {fxEcho && (
+        <div style={{ marginTop: space(2) }}>
+          <Slider label="Echo" value={echoAmt} onChange={setEchoAmt} />
+        </div>
+      )}
 
       {/* Levels */}
       <div style={{ display: "flex", flexDirection: "column", gap: space(2), marginTop: space(4) }}>
