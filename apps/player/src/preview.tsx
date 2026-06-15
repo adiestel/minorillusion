@@ -12,7 +12,7 @@
  *          not part of the storm ambiance, so the preview composes them here.
  * freeze=1 freezes the heartbeat pulse at peak (deterministic still).
  */
-import { StrictMode } from "react";
+import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { palette, playerTheme, themeVars } from "@minorillusion/design-system";
 import { AmbianceLayer } from "./AmbianceLayer";
@@ -20,6 +20,8 @@ import { Heartbeat } from "./Heartbeat";
 import { Flash } from "./Flash";
 import { Consent } from "./Consent";
 import { AudioUnlockModal } from "./AudioUnlockModal";
+import DiceIsland from "./gl/DiceIsland";
+import type { FidelityTier } from "./gl/fidelity";
 import { audio } from "./capabilities/index";
 
 // In the offscreen screenshot harness, neutralise audio: a real <audio> media
@@ -113,6 +115,8 @@ function View() {
           <Heartbeat bpm={72} beats={3} onDone={() => {}} />
         </>
       );
+    case "dice":
+      return <DicePreview tier={(params.get("tier") as FidelityTier) ?? "high"} />;
     case "storm":
     default:
       return (
@@ -124,6 +128,56 @@ function View() {
         </>
       );
   }
+}
+
+/** The M4 dice tray: a roll button + the settled result, over the dark canvas. */
+function DicePreview({ tier }: { tier: FidelityTier }) {
+  const [rollKey, setRollKey] = useState(1);
+  const [result, setResult] = useState<number | null>(null);
+  return (
+    <div style={{ position: "fixed", inset: 0, background: palette.nearBlack }}>
+      <DiceIsland
+        rollKey={rollKey}
+        tier={tier}
+        onSettled={setResult}
+        style={{ width: "100%", height: "100%" }}
+      />
+      <div
+        style={{
+          position: "fixed",
+          left: "50%",
+          bottom: 40,
+          transform: "translateX(-50%)",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 12,
+        }}
+      >
+        <span style={{ fontSize: 40, fontWeight: 800, color: palette.ember, minHeight: 48, fontVariantNumeric: "tabular-nums" }}>
+          {result ?? ""}
+        </span>
+        <button
+          onClick={() => {
+            setResult(null);
+            setRollKey((k) => k + 1);
+          }}
+          style={{
+            background: palette.emberDim,
+            color: palette.bone,
+            border: `1px solid ${palette.ember}`,
+            borderRadius: 8,
+            padding: "10px 22px",
+            fontSize: 16,
+            fontWeight: 600,
+            cursor: "pointer",
+          }}
+        >
+          roll d20
+        </button>
+      </div>
+    </div>
+  );
 }
 
 createRoot(rootEl).render(

@@ -18,17 +18,17 @@
     "@minorillusion/design-system": "workspace:*",
     "@react-three/drei": "^9.120.4",
     "@react-three/fiber": "^8.17.10",
-    "three": "^0.171.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "socket.io-client": "^4.8.1"
+    "socket.io-client": "^4.8.1",
+    "three": "^0.171.0"
   },
   "devDependencies": {
     "@capacitor/cli": "^6.2.0",
     "@types/node": "^22.10.2",
-    "@types/three": "^0.171.0",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
+    "@types/three": "^0.171.0",
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "^5.7.2",
     "vite": "^5.4.11",

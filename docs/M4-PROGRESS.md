@@ -47,12 +47,23 @@ GL budget guardrails.
 - The **GL foundation stays** (committed `e9b909a`) — it's general infra the dice
   reuse.
 
-### Commit 3 — 3D dice (hero visual #2 + physics) — via the screenshot loop
-- [ ] Add a physics engine (decide: `@react-three/rapier`); a draggable/throwable
-      die that tumbles + settles on a face. Cheap fallback: a 2D result.
-- [ ] (Connects to M5's GM-called rolls; M4 owns the interaction/visual.)
+### Commit 3 — 3D dice (hero visual #2) — ✓ DONE (via the screenshot loop)
+- [x] **Pure dice math** (`gl/dice/dieFaces.ts` + test, 9 tests): rotate-vec,
+      up-face-from-quaternion, antipodal pairing, and a d20 numbering where
+      opposite faces sum to 21. GPU/physics-free, fully unit-tested.
+- [x] **DiceIsland** (`gl/DiceIsland.tsx`): a d20 (icosahedron) that tumbles and
+      settles **showing an authoritative result**. Design call (D6 — we own
+      rolls): a physics sim would be biased + a poor system-of-record, so the
+      number is chosen by RNG (server at M5) and a **scripted tumble** lands that
+      face up via the tested math. No physics dep (tried `@react-three/rapier`,
+      hit a ref-forwarding bug + it's the wrong model → removed). Tier-damped;
+      cheap fallback = a flat number (consumer).
+- [x] Reviewed via `preview.html?view=dice` (D13): clean ivory d20, ember edges,
+      contact shadow, settles + reports the roll. **Wired into the app in M5**
+      (GM-called rolls → the die shows the server's result).
 
 ## Verification log
 - 2026-06-15 — M4 started. Confirmed R3F/three/drei already present + unused.
 - 2026-06-15 — Commit 1 (GL foundation): `pnpm typecheck` 5/5; `pnpm test` 114 (contract 28 + server 74 + player 12); `pnpm build` 3/3. fidelity + budget + gate hook landed; vitest added to the player.
 - 2026-06-15 — Crystal ball: built + iterated via the D13 screenshot loop, reviewed, set aside (look didn't land); island/preview removed, nothing committed. App keeps the SVG ball. Foundation retained for the dice.
+- 2026-06-15 — Dice: pure face math (9 tests) + a scripted-tumble d20 island, reviewed via the screenshot loop (clean ivory d20, settles + reports the roll). Rapier tried + removed (ref bug + wrong model for an authoritative roll). `pnpm typecheck` 5/5; `pnpm test` 123 (contract 28 + server 74 + player 21); `pnpm build` 3/3. **M4 GL capability done** (crystal ball deferred); dice wires into the roll flow at M5.
