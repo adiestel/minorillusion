@@ -17,7 +17,8 @@
     "db:down": "docker compose down",
     "smoke:m0": "node scripts/smoke-m0.mjs",
     "smoke:m1": "node scripts/smoke-m1.mjs",
-    "smoke:m2": "node scripts/smoke-m2.mjs"
+    "smoke:m2": "node scripts/smoke-m2.mjs",
+    "smoke:m3": "node scripts/smoke-m3.mjs"
   },
   "devDependencies": {
     "socket.io-client": "^4.8.1",

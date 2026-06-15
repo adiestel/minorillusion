@@ -10,11 +10,14 @@ import {
   renamePlayerRequestSchema,
   sendCueRequestSchema,
   sendEffectRequestSchema,
+  sendTextRequestSchema,
+  sendVoiceRequestSchema,
   viewportSchema,
   whisperscapeMixSchema,
   whisperscapeRequestSchema,
   type ActiveEffect,
   type AmbianceScene,
+  type ChannelMessage,
   type ClientToServerEvents,
   type DeliveredEffect,
   type ServerToClientEvents,
@@ -33,6 +36,7 @@ import {
   type EffectClassification,
 } from "./effects.js";
 import { estimateClipMs, getTtsProvider } from "./tts.js";
+import { dataUrlToParts, getSttProvider } from "./stt.js";
 import { makePhraseSequencer } from "./grabbag.js";
 
 /**
@@ -47,6 +51,9 @@ const DEV_ORIGINS = ["http://localhost:5173", "http://localhost:5174"];
 interface SocketState {
   circleId: string;
   playerId?: string;
+  /** A joined player's display name, cached at join so a channel message can be
+   *  labelled for the GM inbox without a roster lookup. */
+  playerName?: string;
   /** A joined player's last-reported viewport (CSS px); drives the GM Stage. */
   viewport?: Viewport;
 }
@@ -312,6 +319,10 @@ export function createSocketServer(
 ): AppServer {
   const io: AppServer = new Server(app.server, {
     cors: { origin: DEV_ORIGINS },
+    // A voice channel message carries a recorded clip as a base64 data: URL; the
+    // contract bounds it to ~2MB, so lift the socket frame cap above the 1MB
+    // default to admit a PTT clip (still well-bounded against abuse).
+    maxHttpBufferSize: 5_000_000,
   });
 
   // socket.id -> binding. Removed on disconnect.
@@ -389,6 +400,16 @@ export function createSocketServer(
     for (const gm of gmSockets(circleId)) {
       gm.emit("effect:mirror", { playerIds, effect });
     }
+  }
+
+  /**
+   * Push a player's channel message (text/voice → STT) to the circle's GM
+   * socket(s) — the inbox side of the M3 voice/text plane. DM-only: every player
+   * message goes to the GM(s). Live delivery only (M3 keeps no message history;
+   * a reconnecting GM sees messages from then on — log history is M7).
+   */
+  function deliverChannelMessage(circleId: string, message: ChannelMessage): void {
+    for (const gm of gmSockets(circleId)) gm.emit("channel:message", message);
   }
 
   /** Does any socket (GM or player) remain bound to a circle? */
@@ -707,6 +728,7 @@ export function createSocketServer(
         bindings.set(socket.id, {
           circleId: result.circle.id,
           playerId: result.player.id,
+          playerName: result.player.name,
         });
         ack(result);
         // A (re)joining player resumes any sustained ambiance/bed targeting them
@@ -874,6 +896,84 @@ export function createSocketServer(
         effectId: info.effectId,
         playerId: state.playerId,
       });
+    });
+
+    // -- channel:text (player) -> a typed message (the quill) to the GM(s). ----
+    socket.on("channel:text", (req, ack) => {
+      const parsed = sendTextRequestSchema.safeParse(req);
+      if (!parsed.success) {
+        ack({ ok: false, error: "Invalid message." });
+        return;
+      }
+      // Only a joined player may speak back to the GM (the inverse of effects,
+      // which are GM-only). A GM/unbound socket is rejected.
+      const state = bindings.get(socket.id);
+      if (!state || state.playerId === undefined) {
+        ack({ ok: false, error: "Only a joined player may send a message." });
+        return;
+      }
+      const message: ChannelMessage = {
+        id: randomUUID(),
+        circleId: state.circleId,
+        from: state.playerId,
+        fromName: state.playerName ?? "Player",
+        via: "text",
+        text: parsed.data.text,
+        createdAt: new Date().toISOString(),
+      };
+      deliverChannelMessage(state.circleId, message);
+      ack({ ok: true, message });
+    });
+
+    // -- channel:voice (player) -> a recorded clip (the crystal ball PTT): -----
+    //    decode it, transcribe via STT, deliver the transcript to the GM(s).
+    //    The mic is ALWAYS player-initiated (D10) — the server only ever receives
+    //    an already-recorded clip; it never asks a device to capture.
+    socket.on("channel:voice", async (req, ack) => {
+      const parsed = sendVoiceRequestSchema.safeParse(req);
+      if (!parsed.success) {
+        ack({ ok: false, error: "Invalid voice message." });
+        return;
+      }
+      const state = bindings.get(socket.id);
+      if (!state || state.playerId === undefined) {
+        ack({ ok: false, error: "Only a joined player may send a message." });
+        return;
+      }
+      // Decode the data: URL + transcribe (STT hits the network → may throw; a
+      // missing key surfaces as a clean "STT unavailable" ack, never a crash).
+      let transcript: string;
+      try {
+        const { buffer, mimeType } = dataUrlToParts(parsed.data.audio);
+        transcript = await getSttProvider().transcribe(
+          buffer,
+          parsed.data.mimeType ?? mimeType,
+        );
+      } catch (err) {
+        ack({
+          ok: false,
+          error: err instanceof Error ? err.message : "Transcription failed.",
+        });
+        return;
+      }
+      // Clamp to the contract bound and reject an empty transcription (silence).
+      const text = transcript.trim().slice(0, 2000);
+      if (text === "") {
+        ack({ ok: false, error: "No speech detected." });
+        return;
+      }
+      const message: ChannelMessage = {
+        id: randomUUID(),
+        circleId: state.circleId,
+        from: state.playerId,
+        fromName: state.playerName ?? "Player",
+        via: "voice",
+        text,
+        audio: parsed.data.audio, // echo the clip so the GM can play it back
+        createdAt: new Date().toISOString(),
+      };
+      deliverChannelMessage(state.circleId, message);
+      ack({ ok: true, message });
     });
 
     // -- player:viewport (player) -> record live viewport, refresh presence. --

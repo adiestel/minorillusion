@@ -599,6 +599,77 @@ export const effectMirrorSchema = z.object({
 });
 export type EffectMirror = z.infer<typeof effectMirrorSchema>;
 
+// ===========================================================================
+// The player voice/text plane (M3) — the inverse path: a player speaks back to
+// the GM. A player taps the resting canvas and either writes (the quill → text)
+// or holds-to-talk (the crystal ball → a recorded clip the server transcribes via
+// STT). Both surface to the GM as a ChannelMessage; the GM replies with ANY
+// effect (the existing effect router, targeted at the sender) to close the loop.
+//
+// DM-only for M3: every message goes to the GM (the recipient is implicit).
+// Multi-contact + agent channels extend this later (a `to`/`channelId`), so the
+// shape stays small now. INVIOLABLE (D10): the microphone is ALWAYS player-
+// initiated — the server only ever receives an already-recorded clip; it never
+// asks a device to capture. Voice clips are recorded + transcribed, disclosed at
+// consent, and the player sees an active indicator while recording.
+// ===========================================================================
+
+/**
+ * A player's message to the GM — typed (`text`, via the quill) or spoken
+ * (`voice`, via the crystal ball PTT, transcribed by STT). For a voice message,
+ * `text` is the transcript and `audio` optionally carries the recorded clip as a
+ * data: URL so the GM can play back the real voice. Server-stamped id/createdAt.
+ */
+export const channelMessageSchema = z.object({
+  id: z.string().uuid(),
+  circleId: z.string().uuid(),
+  /** Sender player id. */
+  from: z.string().uuid(),
+  /** Sender's display name at send time (so the GM inbox needs no roster join). */
+  fromName: z.string().min(1).max(40),
+  /** How it was composed: the quill (typed) or the crystal ball (spoken). */
+  via: z.enum(["text", "voice"]),
+  /** The body — typed text, or the STT transcript of a voice clip. */
+  text: z.string().min(1).max(2000),
+  /** voice only: the recorded clip as a data: URL, for GM playback. Optional. */
+  audio: z.string().optional(),
+  createdAt: z.string().datetime(),
+});
+export type ChannelMessage = z.infer<typeof channelMessageSchema>;
+
+/** Player → server: send typed text to the GM (the quill). */
+export const sendTextRequestSchema = z.object({
+  text: z.string().min(1).max(2000),
+});
+export type SendTextRequest = z.infer<typeof sendTextRequestSchema>;
+
+/**
+ * Player → server: send a recorded voice clip (the crystal-ball PTT). The server
+ * decodes the data: URL, runs STT to a transcript, and surfaces it to the GM.
+ * The clip is bounded (~2MB of base64) to stay within the socket buffer; PTT
+ * clips are short. mimeType labels the upload for the STT provider.
+ */
+export const sendVoiceRequestSchema = z.object({
+  /** The recorded audio as a data: URL (e.g. data:audio/webm;base64,...). */
+  audio: z.string().min(1).max(3_000_000),
+  /** The clip's MIME type (e.g. "audio/webm"); the recorder reports it. */
+  mimeType: z.string().max(120).optional(),
+  /** Clip length in ms (from the recorder), informational. */
+  durationMs: z.number().int().positive().max(120_000).optional(),
+});
+export type SendVoiceRequest = z.infer<typeof sendVoiceRequestSchema>;
+
+/**
+ * Result of a player message send: the stored ChannelMessage on success (the
+ * voice transcript rides back in `message.text`), or an error (e.g. STT
+ * unavailable when no key is configured).
+ */
+export const sendMessageResultSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), message: channelMessageSchema }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+]);
+export type SendMessageResult = z.infer<typeof sendMessageResultSchema>;
+
 // ---------------------------------------------------------------------------
 // Socket.IO event maps (typed on both ends)
 // ---------------------------------------------------------------------------
@@ -622,6 +693,8 @@ export interface ServerToClientEvents {
   "mixer:apply": (info: MixerSet) => void;
   /** Server ramps the gain of a running sustained sound (e.g. a whisper bed). */
   "effect:gain": (info: { effectId: string; gain: number }) => void;
+  /** Server delivers a player's channel message (text/voice) to the GM(s). */
+  "channel:message": (message: ChannelMessage) => void;
 }
 
 export interface ClientToServerEvents {
@@ -674,6 +747,16 @@ export interface ClientToServerEvents {
   "effect:stop": (
     req: { effectId: string },
     ack: (result: StopEffectResult) => void,
+  ) => void;
+  /** Player sends typed text to the GM (the quill). */
+  "channel:text": (
+    req: SendTextRequest,
+    ack: (result: SendMessageResult) => void,
+  ) => void;
+  /** Player sends a recorded voice clip; the server transcribes it (crystal ball PTT). */
+  "channel:voice": (
+    req: SendVoiceRequest,
+    ack: (result: SendMessageResult) => void,
   ) => void;
 }
 

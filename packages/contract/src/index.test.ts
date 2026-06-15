@@ -4,6 +4,7 @@ import {
   ambianceScene,
   AUDIO_CUE_DURATION_MS,
   audioCue,
+  channelMessageSchema,
   circleSchema,
   deliveredEffectSchema,
   effectMirrorSchema,
@@ -15,6 +16,9 @@ import {
   presenceUpdateSchema,
   sendCueRequestSchema,
   sendEffectRequestSchema,
+  sendMessageResultSchema,
+  sendTextRequestSchema,
+  sendVoiceRequestSchema,
   sixDigitCode,
 } from "./index.js";
 
@@ -341,5 +345,70 @@ describe("effect mirror (GM Stage live view)", () => {
       effect: { id: crypto.randomUUID(), kind: "haptic", pattern: "buzz", createdAt: now },
     });
     expect(r.success).toBe(false);
+  });
+});
+
+describe("player voice/text plane (M3)", () => {
+  const now = new Date().toISOString();
+
+  it("validates a typed (quill) text request and rejects an empty one", () => {
+    expect(sendTextRequestSchema.safeParse({ text: "I search the door." }).success).toBe(true);
+    expect(sendTextRequestSchema.safeParse({ text: "" }).success).toBe(false);
+  });
+
+  it("validates a voice request (data: URL) and rejects a missing clip", () => {
+    expect(
+      sendVoiceRequestSchema.safeParse({
+        audio: "data:audio/webm;base64,AAAA",
+        mimeType: "audio/webm",
+        durationMs: 2400,
+      }).success,
+    ).toBe(true);
+    // No audio payload → rejected.
+    expect(sendVoiceRequestSchema.safeParse({ audio: "" }).success).toBe(false);
+  });
+
+  it("accepts a text and a voice ChannelMessage", () => {
+    const base = {
+      id: crypto.randomUUID(),
+      circleId: crypto.randomUUID(),
+      from: crypto.randomUUID(),
+      fromName: "Bram",
+      createdAt: now,
+    };
+    expect(
+      channelMessageSchema.safeParse({ ...base, via: "text", text: "Hello GM" }).success,
+    ).toBe(true);
+    expect(
+      channelMessageSchema.safeParse({
+        ...base,
+        via: "voice",
+        text: "the transcript",
+        audio: "data:audio/webm;base64,AAAA",
+      }).success,
+    ).toBe(true);
+    // An unknown `via` is rejected (closed set).
+    expect(
+      channelMessageSchema.safeParse({ ...base, via: "telepathy", text: "x" }).success,
+    ).toBe(false);
+  });
+
+  it("parses a send-message result (ok carries the message; error carries a string)", () => {
+    const okR = sendMessageResultSchema.safeParse({
+      ok: true,
+      message: {
+        id: crypto.randomUUID(),
+        circleId: crypto.randomUUID(),
+        from: crypto.randomUUID(),
+        fromName: "Bram",
+        via: "text",
+        text: "Hello",
+        createdAt: now,
+      },
+    });
+    expect(okR.success).toBe(true);
+    expect(
+      sendMessageResultSchema.safeParse({ ok: false, error: "STT unavailable" }).success,
+    ).toBe(true);
   });
 });
