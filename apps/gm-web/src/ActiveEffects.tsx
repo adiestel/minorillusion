@@ -52,6 +52,11 @@ export function ActiveEffects({ circle, players }: ActiveEffectsProps) {
     socket.emit("effect:stop", { effectId }, () => {});
   }
 
+  /** Adjust a running whisperscape's mix live (bed ramps now; voice/echo next phrase). */
+  function mix(effectId: string, patch: { bedGain?: number; voiceGain?: number; echoAmount?: number }) {
+    socket.emit("whisperscape:mix", { effectId, ...patch });
+  }
+
   function stopAll() {
     for (const e of active) {
       socket.emit("effect:stop", { effectId: e.id }, () => {});
@@ -76,7 +81,13 @@ export function ActiveEffects({ circle, players }: ActiveEffectsProps) {
       ) : (
         <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: space(2) }}>
           {active.map((e) => (
-            <ActiveRow key={e.id} effect={e} players={players} onStop={() => stop(e.id)} />
+            <ActiveRow
+              key={e.id}
+              effect={e}
+              players={players}
+              onStop={() => stop(e.id)}
+              onMix={(patch) => mix(e.id, patch)}
+            />
           ))}
         </ul>
       )}
@@ -92,9 +103,10 @@ interface ActiveRowProps {
   effect: ActiveEffect;
   players: Player[];
   onStop: () => void;
+  onMix: (patch: { bedGain?: number; voiceGain?: number; echoAmount?: number }) => void;
 }
 
-function ActiveRow({ effect, players, onStop }: ActiveRowProps) {
+function ActiveRow({ effect, players, onStop, onMix }: ActiveRowProps) {
   return (
     <li
       style={{
@@ -115,6 +127,17 @@ function ActiveRow({ effect, players, onStop }: ActiveRowProps) {
           {targetLabel(effect.target, players)}
         </span>
         {effect.whisper && <WhisperNow progress={effect.whisper} />}
+        {effect.mix && (
+          <div style={{ display: "flex", flexDirection: "column", gap: space(1), marginTop: space(2) }}>
+            {effect.mix.bed && (
+              <MixSlider label="Bed" initial={effect.mix.bedGain} onCommit={(v) => onMix({ bedGain: v })} />
+            )}
+            <MixSlider label="Voice" initial={effect.mix.voiceGain} onCommit={(v) => onMix({ voiceGain: v })} />
+            {effect.mix.echo && (
+              <MixSlider label="Echo" initial={effect.mix.echoAmount} onCommit={(v) => onMix({ echoAmount: v })} />
+            )}
+          </div>
+        )}
       </div>
 
       {effect.sustained ? (
@@ -158,6 +181,54 @@ function WhisperNow({ progress }: { progress: WhisperProgress }) {
       <span style={{ fontSize: "0.72rem", color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>
         {meta}
       </span>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MixSlider — a live bed/voice level for a running whisperscape. Local state so
+// dragging is smooth; each change emits whisperscape:mix (the server ramps the
+// bed on players now and applies the voice level to the next phrase). Seeded
+// once from the authoritative mix; the GM driving it keeps the two in step.
+// ---------------------------------------------------------------------------
+
+function MixSlider({
+  label,
+  initial,
+  onCommit,
+}: {
+  label: string;
+  initial: number;
+  onCommit: (v: number) => void;
+}) {
+  const [v, setV] = useState(initial);
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: space(2) }}>
+      <label
+        style={{
+          fontSize: "0.72rem",
+          color: "var(--text-dim)",
+          minWidth: 72,
+          whiteSpace: "nowrap",
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {label} {Math.round(v * 100)}%
+      </label>
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.05}
+        value={v}
+        onChange={(e) => {
+          const n = Number(e.target.value);
+          setV(n);
+          onCommit(n);
+        }}
+        style={{ flex: 1, accentColor: palette.ember, cursor: "pointer" }}
+        aria-label={`${label} volume`}
+      />
     </div>
   );
 }

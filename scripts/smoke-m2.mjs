@@ -324,10 +324,28 @@ try {
     maxGapMs: 6000,
   });
   check(wsStart.ok === true && wsStart.deliveredTo === 1, "whisperscape:start acked, bed targeted to 1 player");
-  await wsBed;
+  const bedEff = await wsBed;
   ok("whisperscape delivered the dissonant bed (whispers loop)");
   await waitUntil(() => latestActive.some((e) => e.id === wsStart.effectId && e.sustained && e.label === "Whispers"));
   ok("whisperscape shows in effects:active as sustained Whispers");
+
+  // REAL-TIME MIX: the active record carries its live mix; adjusting it ramps the
+  // bed on the player now (effect:gain on the bed's id) and updates the record so
+  // the GM panel's sliders reflect it (the voice level lands on the next phrase).
+  const startMix = latestActive.find((e) => e.id === wsStart.effectId)?.mix;
+  check(
+    startMix?.bed === true && startMix?.echo === true && typeof startMix?.echoAmount === "number",
+    "whisperscape active record carries its live mix (bed + voice + echo)",
+  );
+  const gainHit = waitFor(player, "effect:gain", (g) => g.effectId === bedEff.id && g.gain === 0.3);
+  gm.emit("whisperscape:mix", { effectId: wsStart.effectId, bedGain: 0.3, voiceGain: 0.5, echoAmount: 0.6 });
+  await gainHit;
+  ok("bed-gain ramp reached the player (effect:gain on the bed id)");
+  await waitUntil(() => {
+    const m = latestActive.find((e) => e.id === wsStart.effectId)?.mix;
+    return m?.bedGain === 0.3 && m?.voiceGain === 0.5 && m?.echoAmount === 0.6;
+  });
+  ok("whisperscape mix updated in effects:active (bed 0.3, voice 0.5, echo 0.6)");
 
   // The runner publishes live phrase progress on the active record — the GM panel
   // and Stage read this to highlight the playing phrase. Sequential order makes

@@ -11,6 +11,7 @@ import {
   sendCueRequestSchema,
   sendEffectRequestSchema,
   viewportSchema,
+  whisperscapeMixSchema,
   whisperscapeRequestSchema,
   type ActiveEffect,
   type AmbianceScene,
@@ -19,6 +20,7 @@ import {
   type ServerToClientEvents,
   type Target,
   type Viewport,
+  type WhisperMix,
   type WhisperProgress,
 } from "@minorillusion/contract";
 import { CircleService } from "./circles.js";
@@ -83,6 +85,12 @@ interface ActiveEffectRecord {
   /** Whisperscape records: live phrase progress (which line is sounding, how
    *  many remain) — surfaced on the wire so the GM panel + Stage can show it. */
   whisper?: WhisperProgress;
+  /** Whisperscape records: the bed effect id (for real-time bed-gain ramps) —
+   *  absent when the bed is off. */
+  bedId?: string;
+  /** Whisperscape records: the live mix (bed on/off + levels) the GM panel
+   *  renders sliders from. The runner reads voiceGain here so changes apply. */
+  mix?: WhisperMix;
 }
 
 /**
@@ -213,6 +221,30 @@ class ActiveEffectRegistry {
     this.push(circleId);
   }
 
+  /**
+   * Merge a whisperscape record's live mix (bed on/off + levels) and re-push, so
+   * the GM panel's sliders reflect it. Returns the record so the caller can act
+   * (ramp the running bed on players). No-op + undefined for an unknown id.
+   */
+  setWhisperMix(
+    circleId: string,
+    effectId: string,
+    patch: { bed?: boolean; bedGain?: number; voiceGain?: number; echo?: boolean; echoAmount?: number },
+  ): ActiveEffectRecord | undefined {
+    const record = this.byCircle.get(circleId)?.get(effectId);
+    if (!record) return undefined;
+    const cur = record.mix ?? { bed: false, bedGain: 0.5, voiceGain: 0.9, echo: true, echoAmount: 0.2 };
+    record.mix = {
+      bed: patch.bed ?? cur.bed,
+      bedGain: patch.bedGain ?? cur.bedGain,
+      voiceGain: patch.voiceGain ?? cur.voiceGain,
+      echo: patch.echo ?? cur.echo,
+      echoAmount: patch.echoAmount ?? cur.echoAmount,
+    };
+    this.push(circleId);
+    return record;
+  }
+
   /** Every record in a circle (the live snapshot), internal handles stripped. */
   list(circleId: string): ActiveEffect[] {
     const circle = this.byCircle.get(circleId);
@@ -230,6 +262,7 @@ class ActiveEffectRegistry {
       if (r.durationMs !== undefined) effect.durationMs = r.durationMs;
       if (r.scene !== undefined) effect.scene = r.scene;
       if (r.whisper !== undefined) effect.whisper = r.whisper;
+      if (r.mix !== undefined) effect.mix = r.mix;
       effects.push(effect);
     }
     return effects;
@@ -553,14 +586,17 @@ export function createSocketServer(
           whisperPlayerId !== undefined ? present.get(whisperPlayerId) : undefined;
         if (sock && whisperPlayerId !== undefined) {
           // GM-configured FX, NO bed (the bed is already the ambience).
+          // Read the live mix so real-time voice/echo changes land on this phrase.
+          const liveEcho = record.mix?.echo ?? echo;
+          const liveEchoAmount = record.mix?.echoAmount ?? echoAmount;
           const eff = await buildEffect({
             kind: "audio",
             source: { via: "tts", text: step.phrase, ...(voice ? { voice } : {}) },
-            echo,
-            ...(echoAmount !== undefined ? { echoAmount } : {}),
+            echo: liveEcho,
+            ...(liveEcho && liveEchoAmount !== undefined ? { echoAmount: liveEchoAmount } : {}),
             distortion,
             pan,
-            gain: voiceGain,
+            gain: record.mix?.voiceGain ?? voiceGain,
           });
           if (!stopped) {
             sock.emit("effect:deliver", eff);
@@ -905,6 +941,15 @@ export function createSocketServer(
         active.registerRaw(state.circleId, recordId, "whisperscape", "Whispers", target, bed);
         const record = active.get(state.circleId, recordId);
         if (record) {
+          // Seed the bed id + live mix so the GM panel shows real-time sliders.
+          if (bed) record.bedId = bed.id;
+          active.setWhisperMix(state.circleId, recordId, {
+            bed: useBed,
+            bedGain,
+            voiceGain,
+            echo,
+            echoAmount: echoAmount ?? 0.2,
+          });
           startWhisperscape(state.circleId, record, {
             phrases,
             order,
@@ -927,6 +972,34 @@ export function createSocketServer(
           ok: false,
           error: err instanceof Error ? err.message : "Failed to start whisperscape.",
         });
+      }
+    });
+
+    // -- whisperscape:mix (GM) -> adjust a running whisperscape's bed/voice mix. -
+    socket.on("whisperscape:mix", (req) => {
+      const parsed = whisperscapeMixSchema.safeParse(req);
+      if (!parsed.success) return;
+      const state = bindings.get(socket.id);
+      if (!state || state.playerId !== undefined) return; // GM only
+      const existing = active.get(state.circleId, parsed.data.effectId);
+      if (!existing || existing.kind !== "whisperscape") return;
+
+      const { bedGain, voiceGain, echoAmount } = parsed.data;
+      // voiceGain + echoAmount land on the next phrases (the runner reads
+      // record.mix); a bedGain ramps the running bed now and updates the resume copy.
+      const record = active.setWhisperMix(state.circleId, parsed.data.effectId, {
+        ...(bedGain !== undefined ? { bedGain } : {}),
+        ...(voiceGain !== undefined ? { voiceGain } : {}),
+        ...(echoAmount !== undefined ? { echoAmount } : {}),
+      });
+      if (record && bedGain !== undefined && record.bedId !== undefined) {
+        const present = presentPlayerSockets(state.circleId);
+        const recipientIds = resolveTargets(record.target, [...present.keys()]);
+        for (const playerId of recipientIds) {
+          present.get(playerId)?.emit("effect:gain", { effectId: record.bedId, gain: bedGain });
+        }
+        // Keep the resume copy at the new level so a rejoin restores it.
+        if (record.delivered?.kind === "audio") record.delivered.gain = bedGain;
       }
     });
 

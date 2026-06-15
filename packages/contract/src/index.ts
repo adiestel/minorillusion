@@ -463,6 +463,22 @@ export const whisperProgressSchema = z.object({
 });
 export type WhisperProgress = z.infer<typeof whisperProgressSchema>;
 
+/**
+ * A running whisperscape's live mix — whether the bed is on plus the two levels
+ * — so the GM's Active panel can show sliders that adjust the bed/voice volume
+ * in real time on the effect that's already playing.
+ */
+export const whisperMixSchema = z.object({
+  bed: z.boolean(),
+  bedGain: z.number().min(0).max(1),
+  voiceGain: z.number().min(0).max(1),
+  /** Whether the spoken phrases carry echo, and its 0..1 intensity — adjustable
+   *  live (applies to the next phrase). When echo is off, the panel hides it. */
+  echo: z.boolean(),
+  echoAmount: z.number().min(0).max(1),
+});
+export type WhisperMix = z.infer<typeof whisperMixSchema>;
+
 export const activeEffectSchema = z.object({
   id: z.string().uuid(),
   kind: z.string(),
@@ -480,6 +496,9 @@ export const activeEffectSchema = z.object({
   /** whisperscape only: live phrase progress (which is playing, how many left)
    *  so the GM panel + Stage can highlight it as it sounds. */
   whisper: whisperProgressSchema.optional(),
+  /** whisperscape only: the live mix, so the GM panel can show real-time
+   *  bed/voice volume sliders for the running effect. */
+  mix: whisperMixSchema.optional(),
 });
 export type ActiveEffect = z.infer<typeof activeEffectSchema>;
 
@@ -540,6 +559,20 @@ export const whisperscapeRequestSchema = z.object({
 });
 export type WhisperscapeRequest = z.infer<typeof whisperscapeRequestSchema>;
 
+/**
+ * Adjust a running whisperscape's mix in real time, by its active-effect id: the
+ * bed level ramps on the players immediately; the voice level takes effect on the
+ * following phrases. Either field may be omitted to leave it unchanged.
+ */
+export const whisperscapeMixSchema = z.object({
+  effectId: z.string().uuid(),
+  bedGain: z.number().min(0).max(1).optional(),
+  voiceGain: z.number().min(0).max(1).optional(),
+  /** 0..1 echo intensity for the spoken phrases — lands on the next phrase. */
+  echoAmount: z.number().min(0).max(1).optional(),
+});
+export type WhisperscapeMix = z.infer<typeof whisperscapeMixSchema>;
+
 // ---------------------------------------------------------------------------
 // Effect mirror — a read-only copy of each delivered effect, fanned to the GM
 // so the GM's live Stage can render what every player is seeing (incl. the
@@ -575,6 +608,8 @@ export interface ServerToClientEvents {
   "circle:ejected": (info: { reason?: string }) => void;
   /** Server applies the GM's master effects volume to a player. */
   "mixer:apply": (info: MixerSet) => void;
+  /** Server ramps the gain of a running sustained sound (e.g. a whisper bed). */
+  "effect:gain": (info: { effectId: string; gain: number }) => void;
 }
 
 export interface ClientToServerEvents {
@@ -621,6 +656,8 @@ export interface ClientToServerEvents {
     req: WhisperscapeRequest,
     ack: (result: SendEffectResult) => void,
   ) => void;
+  /** GM adjusts a running whisperscape's bed/voice mix in real time. */
+  "whisperscape:mix": (req: WhisperscapeMix) => void;
   /** GM stops a sustained effect (or cancels a transient one early). */
   "effect:stop": (
     req: { effectId: string },

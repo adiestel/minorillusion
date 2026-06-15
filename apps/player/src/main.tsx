@@ -434,6 +434,9 @@ function App() {
   // stores "set the scene back to clear" (the AmbianceLayer then unmounts, which
   // already stops its rain bed). A ref (not state) — purely imperative bookkeeping.
   const sustainedCleanups = useRef<Map<string, () => void>>(new Map());
+  // effectId → setGain, for the audio loops only (e.g. a whisper bed), so the GM
+  // can ramp a running effect's volume live via effect:gain.
+  const sustainedGains = useRef<Map<string, (gain: number) => void>>(new Map());
   // The effect id of the ambiance scene currently showing (null when clear), so
   // effect:end can tell whether an id refers to the live ambiance.
   const ambianceEffectId = useRef<string | null>(null);
@@ -485,6 +488,7 @@ function App() {
   const resyncLocalState = useCallback(() => {
     audio.stopAll();
     sustainedCleanups.current.clear();
+    sustainedGains.current.clear();
     ambianceEffectId.current = null;
     setAmbiance({ scene: "clear" });
   }, []);
@@ -596,11 +600,13 @@ function App() {
               loop: effect.loop,
             });
             // A standalone loop is a sustained effect: register its stop under the
-            // effect id so effect:end can halt it. (The storm's rain bed is owned
-            // by the AmbianceLayer instead and isn't tracked here.) One-shots play
-            // out and untrack themselves inside the audio capability.
+            // effect id so effect:end can halt it, and its setGain so effect:gain
+            // can ramp it live (the GM adjusting a running whisper bed). (The
+            // storm's rain bed is owned by the AmbianceLayer instead and isn't
+            // tracked here.) One-shots play out and untrack themselves.
             if (effect.loop === true) {
               registerSustained(effect.id, handle.stop);
+              sustainedGains.current.set(effect.id, (g) => handle.setGain(g));
             }
           });
           break;
@@ -687,11 +693,21 @@ function App() {
   // ambiance cleanup sweeps the scene back to clear (the AmbianceLayer then
   // unmounts and stops its own rain bed); a loop cleanup is its handle.stop.
   const handleEffectEnd = useCallback(({ effectId }: { effectId: string }) => {
+    sustainedGains.current.delete(effectId);
     const cleanup = sustainedCleanups.current.get(effectId);
     if (cleanup === undefined) return;
     sustainedCleanups.current.delete(effectId);
     cleanup();
   }, []);
+
+  // Ramp a running sustained sound's volume (the GM adjusting a live whisper bed
+  // mix). No-op for an unknown id (already ended, or never a tracked loop).
+  const handleEffectGain = useCallback(
+    ({ effectId, gain }: { effectId: string; gain: number }) => {
+      sustainedGains.current.get(effectId)?.(gain);
+    },
+    [],
+  );
 
   // Listen for effect:deliver (always, not just when joined — the server won't
   // deliver to a socket that hasn't joined a circle, so this is safe).
@@ -709,6 +725,14 @@ function App() {
       socket.off("effect:end", handleEffectEnd);
     };
   }, [handleEffectEnd]);
+
+  // Listen for effect:gain (ramp a running loop's volume — live whisper mix).
+  useEffect(() => {
+    socket.on("effect:gain", handleEffectGain);
+    return () => {
+      socket.off("effect:gain", handleEffectGain);
+    };
+  }, [handleEffectGain]);
 
   // Apply the GM's master effects volume (live).
   useEffect(() => {

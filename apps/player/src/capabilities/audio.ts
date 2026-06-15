@@ -69,6 +69,9 @@ interface PlayOptions {
 /** Handle returned from play(); stop() halts that one sound (fading if a loop). */
 export interface AudioHandle {
   stop: () => void;
+  /** Ramp this sound's level to `gain` (0..1) over `rampMs` (default ~150ms) —
+   *  e.g. the GM adjusting a running whisper bed's volume in real time. */
+  setGain: (gain: number, rampMs?: number) => void;
 }
 
 /** Knobs for the whispers bed. */
@@ -95,6 +98,18 @@ export interface VoiceOptions {
   pan?: boolean;
   /** Called when the voice finishes (or fails to play). */
   onEnded?: () => void;
+}
+
+/** Smoothly ramp an AudioParam to `value` (clamped 0..1) over `rampMs`. */
+function rampParam(param: AudioParam, now: number, value: number, rampMs: number): void {
+  const v = Math.max(0, Math.min(1, value));
+  try {
+    param.cancelScheduledValues(now);
+    param.setValueAtTime(param.value, now);
+    param.linearRampToValueAtTime(v, now + Math.max(0, rampMs) / 1000);
+  } catch {
+    /* ignore */
+  }
 }
 
 /** A soft-clip overdrive curve for the distortion waveshaper. */
@@ -145,7 +160,7 @@ const AudioContextCtor: AudioCtor | undefined =
 
 const hasAudioElement = typeof Audio !== "undefined";
 
-const NOOP_HANDLE: AudioHandle = { stop: () => {} };
+const NOOP_HANDLE: AudioHandle = { stop: () => {}, setGain: () => {} };
 
 /** One live source + its gain (for fades) + how long to fade out on stop. */
 interface ActiveSource {
@@ -322,6 +337,11 @@ class WebAudio implements AudioCapability {
         state.stopped = true;
         if (state.entry !== null) this.fadeOutAndStop(state.entry);
       },
+      setGain: (gain, rampMs = 150) => {
+        const entry = state.entry;
+        if (entry === null) return; // not decoded yet — the start gain stands
+        rampParam(entry.gain.gain, ctx.currentTime, gain, rampMs);
+      },
     };
   }
 
@@ -382,7 +402,16 @@ class WebAudio implements AudioCapability {
     el.addEventListener("ended", cleanup, { once: true });
     const p = el.play();
     if (p !== undefined) void p.catch(cleanup);
-    return { stop: cleanup };
+    return {
+      stop: cleanup,
+      setGain: (gain) => {
+        try {
+          el.volume = Math.max(0, Math.min(1, gain));
+        } catch {
+          /* ignore */
+        }
+      },
+    };
   }
 
   stopAll(): void {
@@ -512,9 +541,13 @@ class WebAudio implements AudioCapability {
         }, fadeOutMs + 120);
         this.beds.delete(entry);
       },
+      setGain: (gain: number, rampMs = 150) => {
+        if (live.stopped) return;
+        rampParam(master.gain, ctx.currentTime, gain, rampMs); // the bed's level
+      },
     };
     this.beds.add(entry);
-    return { stop: entry.stop };
+    return { stop: entry.stop, setGain: entry.setGain };
   }
 
   playVoice(dataUrl: string, opts: VoiceOptions = {}): AudioHandle {
@@ -636,6 +669,9 @@ class WebAudio implements AudioCapability {
         state.stopped = true;
         state.cleanup();
       },
+      // A spoken clip is a one-off; live volume changes apply to the next phrase,
+      // not the one already sounding — so nothing to ramp here.
+      setGain: () => {},
     };
   }
 

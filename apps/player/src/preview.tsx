@@ -25,8 +25,8 @@ import { audio } from "./capabilities/index";
 // In the offscreen screenshot harness, neutralise audio: a real <audio> media
 // load (the rain bed) keeps Chrome's --virtual-time-budget from ever settling,
 // so storm/ember never capture. The visuals we're reviewing are pure CSS.
-audio.play = () => ({ stop: () => {} });
-audio.playWhisperBed = () => ({ stop: () => {} });
+audio.play = () => ({ stop: () => {}, setGain: () => {} });
+audio.playWhisperBed = () => ({ stop: () => {}, setGain: () => {} });
 audio.stopAll = () => {};
 audio.unlock = () => {};
 
