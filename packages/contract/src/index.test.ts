@@ -1,25 +1,33 @@
 import { describe, expect, it } from "vitest";
 import {
+  abilityModifier,
   activeEffectSchema,
   ambianceScene,
   AUDIO_CUE_DURATION_MS,
   audioCue,
   channelMessageSchema,
+  characterSchema,
   circleSchema,
   deliveredEffectSchema,
   effectMirrorSchema,
   effectSpecSchema,
   hapticPattern,
+  initiativeStateSchema,
   joinRequestSchema,
   joinResultSchema,
   messageEffectSchema,
   presenceUpdateSchema,
+  proficiencyForLevel,
+  rollRequestSchema,
+  rollResultSchema,
   sendCueRequestSchema,
   sendEffectRequestSchema,
   sendMessageResultSchema,
   sendTextRequestSchema,
   sendVoiceRequestSchema,
   sixDigitCode,
+  skill,
+  SKILL_ABILITY,
 } from "./index.js";
 
 describe("contract schemas", () => {
@@ -410,5 +418,107 @@ describe("player voice/text plane (M3)", () => {
     expect(
       sendMessageResultSchema.safeParse({ ok: false, error: "STT unavailable" }).success,
     ).toBe(true);
+  });
+});
+
+describe("D&D layer (M5)", () => {
+  const now = new Date().toISOString();
+
+  it("computes ability modifiers (floor((score-10)/2))", () => {
+    expect(abilityModifier(10)).toBe(0);
+    expect(abilityModifier(11)).toBe(0);
+    expect(abilityModifier(12)).toBe(1);
+    expect(abilityModifier(8)).toBe(-1);
+    expect(abilityModifier(20)).toBe(5);
+    expect(abilityModifier(1)).toBe(-5);
+  });
+
+  it("computes proficiency bonus by level (+2 at 1–4, +3 at 5–8, … +6 at 17–20)", () => {
+    expect(proficiencyForLevel(1)).toBe(2);
+    expect(proficiencyForLevel(4)).toBe(2);
+    expect(proficiencyForLevel(5)).toBe(3);
+    expect(proficiencyForLevel(9)).toBe(4);
+    expect(proficiencyForLevel(13)).toBe(5);
+    expect(proficiencyForLevel(20)).toBe(6);
+  });
+
+  it("maps every skill to a governing ability", () => {
+    for (const s of skill.options) {
+      expect(SKILL_ABILITY[s]).toBeDefined();
+    }
+    expect(SKILL_ABILITY.stealth).toBe("dex");
+    expect(SKILL_ABILITY.perception).toBe("wis");
+    expect(SKILL_ABILITY.persuasion).toBe("cha");
+  });
+
+  it("validates a character sheet and rejects an out-of-range score", () => {
+    const base = {
+      id: crypto.randomUUID(),
+      circleId: crypto.randomUUID(),
+      name: "Bram",
+      level: 5,
+      abilities: { str: 16, dex: 14, con: 14, int: 10, wis: 12, cha: 8 },
+      skillProficiencies: ["stealth", "perception"],
+      saveProficiencies: ["dex", "con"],
+      source: "manual",
+      createdAt: now,
+      updatedAt: now,
+    };
+    expect(characterSchema.safeParse(base).success).toBe(true);
+    expect(
+      characterSchema.safeParse({ ...base, abilities: { ...base.abilities, str: 99 } }).success,
+    ).toBe(false);
+  });
+
+  it("validates derived + raw roll requests and rejects an unknown kind", () => {
+    expect(
+      rollRequestSchema.safeParse({ spec: { kind: "save", ability: "dex" }, characterId: crypto.randomUUID() }).success,
+    ).toBe(true);
+    expect(
+      rollRequestSchema.safeParse({ spec: { kind: "skill", skill: "stealth" }, mode: "advantage" }).success,
+    ).toBe(true);
+    expect(
+      rollRequestSchema.safeParse({ spec: { kind: "raw", count: 2, sides: 6, modifier: 3 } }).success,
+    ).toBe(true);
+    // d7 isn't a real die.
+    expect(
+      rollRequestSchema.safeParse({ spec: { kind: "raw", count: 1, sides: 7, modifier: 0 } }).success,
+    ).toBe(false);
+    expect(rollRequestSchema.safeParse({ spec: { kind: "bogus" } }).success).toBe(false);
+  });
+
+  it("validates a resolved roll result", () => {
+    const r = rollResultSchema.safeParse({
+      id: crypto.randomUUID(),
+      label: "Dexterity Save",
+      characterName: "Bram",
+      sides: 20,
+      dice: [17, 4],
+      kept: 17,
+      modifier: 5,
+      total: 22,
+      mode: "advantage",
+      crit: false,
+      fumble: false,
+      createdAt: now,
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("validates initiative state with a turn cursor", () => {
+    const r = initiativeStateSchema.safeParse({
+      circleId: crypto.randomUUID(),
+      round: 1,
+      turnIndex: 0,
+      entries: [
+        { id: crypto.randomUUID(), name: "Bram", initiative: 18 },
+        { id: crypto.randomUUID(), name: "Goblin", initiative: 12, hp: 7, maxHp: 7 },
+      ],
+    });
+    expect(r.success).toBe(true);
+    // turnIndex -1 (not started) is allowed; -2 is not.
+    expect(
+      initiativeStateSchema.safeParse({ circleId: crypto.randomUUID(), round: 0, turnIndex: -2, entries: [] }).success,
+    ).toBe(false);
   });
 });

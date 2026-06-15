@@ -670,6 +670,229 @@ export const sendMessageResultSchema = z.discriminatedUnion("ok", [
 ]);
 export type SendMessageResult = z.infer<typeof sendMessageResultSchema>;
 
+// ===========================================================================
+// The D&D layer (M5) — characters, GM-called rolls, the initiative tracker.
+//
+// We are the SYSTEM OF RECORD for rolls + initiative (DECISIONS D6): there is no
+// D&D Beyond write path and no official API, so we model only the *roll-relevant*
+// modifiers internally, behind a sheet-provider adapter, with MANUAL ENTRY as the
+// guaranteed path and DDB public-link import as a best-effort convenience. Rolls
+// are resolved AUTHORITATIVELY on the server (one fair RNG, correct modifiers,
+// advantage/disadvantage, crit/fumble); the player's 3D die (M4) merely
+// VISUALIZES the server's result.
+// ===========================================================================
+
+/** The six ability scores. */
+export const ability = z.enum(["str", "dex", "con", "int", "wis", "cha"]);
+export type Ability = z.infer<typeof ability>;
+
+/** The standard 18 skills. */
+export const skill = z.enum([
+  "acrobatics", "animal_handling", "arcana", "athletics", "deception",
+  "history", "insight", "intimidation", "investigation", "medicine",
+  "nature", "perception", "performance", "persuasion", "religion",
+  "sleight_of_hand", "stealth", "survival",
+]);
+export type Skill = z.infer<typeof skill>;
+
+/** Which ability governs each skill (drives "correct modifiers"). */
+export const SKILL_ABILITY: Record<Skill, Ability> = {
+  acrobatics: "dex", animal_handling: "wis", arcana: "int", athletics: "str",
+  deception: "cha", history: "int", insight: "wis", intimidation: "cha",
+  investigation: "int", medicine: "wis", nature: "int", perception: "wis",
+  performance: "cha", persuasion: "cha", religion: "int",
+  sleight_of_hand: "dex", stealth: "dex", survival: "wis",
+};
+
+/** Ability modifier from a score: floor((score − 10) / 2). */
+export function abilityModifier(score: number): number {
+  return Math.floor((score - 10) / 2);
+}
+
+/** Standard proficiency bonus for a character level (1–4 → +2, 5–8 → +3, …). */
+export function proficiencyForLevel(level: number): number {
+  return 2 + Math.floor((Math.max(1, Math.min(20, level)) - 1) / 4);
+}
+
+/** The polyhedral dice we support. */
+export const dieSides = z.union([
+  z.literal(4), z.literal(6), z.literal(8), z.literal(10),
+  z.literal(12), z.literal(20), z.literal(100),
+]);
+export type DieSides = z.infer<typeof dieSides>;
+
+/** The six scores, as a map ability→score (3–30 to allow boosted statlines). */
+export const abilityScoresSchema = z.object({
+  str: z.number().int().min(1).max(30),
+  dex: z.number().int().min(1).max(30),
+  con: z.number().int().min(1).max(30),
+  int: z.number().int().min(1).max(30),
+  wis: z.number().int().min(1).max(30),
+  cha: z.number().int().min(1).max(30),
+});
+export type AbilityScores = z.infer<typeof abilityScoresSchema>;
+
+/**
+ * A character sheet — only the roll-relevant modifiers (D6). Persisted per
+ * circle. `source` records whether it was hand-entered or DDB-imported;
+ * `proficiencyBonus` is optional (derive from level when absent).
+ */
+export const characterSchema = z.object({
+  id: z.string().uuid(),
+  circleId: z.string().uuid(),
+  name: z.string().min(1).max(60),
+  level: z.number().int().min(1).max(20),
+  abilities: abilityScoresSchema,
+  /** Override the level-derived proficiency bonus when set. */
+  proficiencyBonus: z.number().int().min(0).max(10).optional(),
+  /** Skills the character is proficient in. */
+  skillProficiencies: z.array(skill).max(18),
+  /** Abilities the character is proficient in saving throws for. */
+  saveProficiencies: z.array(ability).max(6),
+  maxHp: z.number().int().min(0).max(1000).optional(),
+  ac: z.number().int().min(0).max(40).optional(),
+  source: z.enum(["manual", "ddb"]).default("manual"),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+export type Character = z.infer<typeof characterSchema>;
+
+/** Create/update a character (id present = update). Server stamps timestamps. */
+export const saveCharacterRequestSchema = z.object({
+  id: z.string().uuid().optional(),
+  name: z.string().min(1).max(60),
+  level: z.number().int().min(1).max(20),
+  abilities: abilityScoresSchema,
+  proficiencyBonus: z.number().int().min(0).max(10).optional(),
+  skillProficiencies: z.array(skill).max(18).default([]),
+  saveProficiencies: z.array(ability).max(6).default([]),
+  maxHp: z.number().int().min(0).max(1000).optional(),
+  ac: z.number().int().min(0).max(40).optional(),
+});
+export type SaveCharacterRequest = z.infer<typeof saveCharacterRequestSchema>;
+
+export const saveCharacterResultSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), character: characterSchema }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+]);
+export type SaveCharacterResult = z.infer<typeof saveCharacterResultSchema>;
+
+export const charactersListSchema = z.object({
+  circleId: z.string().uuid(),
+  characters: z.array(characterSchema),
+});
+export type CharactersList = z.infer<typeof charactersListSchema>;
+
+/** Best-effort DDB import of a public character share link (D6: never depend on it). */
+export const importCharacterRequestSchema = z.object({
+  /** A D&D Beyond public character URL or its numeric id. */
+  url: z.string().min(1).max(400),
+});
+export type ImportCharacterRequest = z.infer<typeof importCharacterRequestSchema>;
+
+/** Whether a roll has advantage, disadvantage, or neither. */
+export const rollMode = z.enum(["normal", "advantage", "disadvantage"]);
+export type RollMode = z.infer<typeof rollMode>;
+
+/**
+ * What the GM is asking to roll. Derived kinds (check/save/skill) pull the
+ * modifier from the named character's sheet; `raw` is an explicit NdS+mod (damage,
+ * a flat d20, etc.).
+ */
+export const rollSpecSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("check"), ability }),
+  z.object({ kind: z.literal("save"), ability }),
+  z.object({ kind: z.literal("skill"), skill }),
+  z.object({
+    kind: z.literal("raw"),
+    count: z.number().int().min(1).max(20),
+    sides: dieSides,
+    modifier: z.number().int().min(-50).max(50),
+  }),
+]);
+export type RollSpec = z.infer<typeof rollSpecSchema>;
+
+/** GM → server: call a roll. The server resolves it authoritatively. */
+export const rollRequestSchema = z.object({
+  spec: rollSpecSchema,
+  /** Derive modifiers from this character (required for check/save/skill). */
+  characterId: z.string().uuid().optional(),
+  mode: rollMode.default("normal"),
+  /** Override the auto label, e.g. "Death Save". */
+  label: z.string().max(80).optional(),
+  /** Show the rolling die on this player's screen (the M4 dice viz). */
+  targetPlayerId: z.string().uuid().optional(),
+  /** Broadcast the result to all players (vs. GM-only / target-only). */
+  public: z.boolean().default(false),
+});
+export type RollRequest = z.infer<typeof rollRequestSchema>;
+
+/**
+ * The resolved roll (server-authoritative). `dice` are the raw faces rolled (two
+ * d20s for advantage/disadvantage; N dice for `raw`); `kept` is the chosen/summed
+ * dice before the modifier; `total = kept + modifier`. crit/fumble flag a natural
+ * 20/1 on a single-d20 check/save/skill.
+ */
+export const rollResultSchema = z.object({
+  id: z.string().uuid(),
+  label: z.string(),
+  characterName: z.string().optional(),
+  sides: dieSides,
+  dice: z.array(z.number().int()),
+  kept: z.number().int(),
+  modifier: z.number().int(),
+  total: z.number().int(),
+  mode: rollMode,
+  crit: z.boolean(),
+  fumble: z.boolean(),
+  /** Which player's die should visualize this (if any). */
+  targetPlayerId: z.string().uuid().optional(),
+  createdAt: z.string().datetime(),
+});
+export type RollResult = z.infer<typeof rollResultSchema>;
+
+// ---------------------------------------------------------------------------
+// Initiative tracker — server-authoritative ordered combat order (D6: owned).
+// ---------------------------------------------------------------------------
+
+export const initiativeEntrySchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().min(1).max(60),
+  initiative: z.number().int().min(-10).max(60),
+  /** Optional links/fields for a fuller tracker. */
+  characterId: z.string().uuid().optional(),
+  hp: z.number().int().optional(),
+  maxHp: z.number().int().optional(),
+});
+export type InitiativeEntry = z.infer<typeof initiativeEntrySchema>;
+
+/** The live initiative order: entries sorted high→low, with a current-turn cursor. */
+export const initiativeStateSchema = z.object({
+  circleId: z.string().uuid(),
+  round: z.number().int().min(0),
+  /** Index of the entry whose turn it is (−1 when not started/empty). */
+  turnIndex: z.number().int().min(-1),
+  entries: z.array(initiativeEntrySchema),
+});
+export type InitiativeState = z.infer<typeof initiativeStateSchema>;
+
+/** GM → server: replace the whole initiative order (add/edit/remove/reorder). */
+export const setInitiativeRequestSchema = z.object({
+  entries: z
+    .array(
+      z.object({
+        id: z.string().uuid().optional(),
+        name: z.string().min(1).max(60),
+        initiative: z.number().int().min(-10).max(60),
+        characterId: z.string().uuid().optional(),
+        hp: z.number().int().optional(),
+        maxHp: z.number().int().optional(),
+      }),
+    )
+    .max(50),
+});
+export type SetInitiativeRequest = z.infer<typeof setInitiativeRequestSchema>;
+
 // ---------------------------------------------------------------------------
 // Socket.IO event maps (typed on both ends)
 // ---------------------------------------------------------------------------
@@ -695,6 +918,13 @@ export interface ServerToClientEvents {
   "effect:gain": (info: { effectId: string; gain: number }) => void;
   /** Server delivers a player's channel message (text/voice) to the GM(s). */
   "channel:message": (message: ChannelMessage) => void;
+  /** Server pushes the circle's character roster to the GM(s) (M5). */
+  "characters:list": (list: CharactersList) => void;
+  /** Server delivers a resolved roll: to the GM(s), the target player (its die
+   *  visualizes it), and all players when the roll is public. */
+  "roll:result": (result: RollResult) => void;
+  /** Server pushes the live initiative order to the GM(s). */
+  "initiative:update": (state: InitiativeState) => void;
 }
 
 export interface ClientToServerEvents {
@@ -758,6 +988,39 @@ export interface ClientToServerEvents {
     req: SendVoiceRequest,
     ack: (result: SendMessageResult) => void,
   ) => void;
+  /** GM creates/updates a character sheet (id present = update). */
+  "character:save": (
+    req: SaveCharacterRequest,
+    ack: (result: SaveCharacterResult) => void,
+  ) => void;
+  /** GM fetches the circle's characters. */
+  "character:list": (ack: (list: CharactersList) => void) => void;
+  /** GM deletes a character. */
+  "character:delete": (
+    req: { characterId: string },
+    ack: (result: { ok: boolean }) => void,
+  ) => void;
+  /** GM imports a character from a D&D Beyond public link (best-effort, D6). */
+  "character:import": (
+    req: ImportCharacterRequest,
+    ack: (result: SaveCharacterResult) => void,
+  ) => void;
+  /** GM calls a roll; the server resolves it authoritatively and returns it. */
+  "roll:call": (
+    req: RollRequest,
+    ack: (
+      result: { ok: true; result: RollResult } | { ok: false; error: string },
+    ) => void,
+  ) => void;
+  /** GM replaces the initiative order (add/edit/remove/reorder). */
+  "initiative:set": (
+    req: SetInitiativeRequest,
+    ack: (state: InitiativeState) => void,
+  ) => void;
+  /** GM advances to the next combatant's turn (wraps + bumps the round). */
+  "initiative:advance": (ack: (state: InitiativeState) => void) => void;
+  /** GM clears the initiative tracker. */
+  "initiative:clear": (ack: (state: InitiativeState) => void) => void;
 }
 
 export const DEFAULT_SERVER_PORT = 3001;
