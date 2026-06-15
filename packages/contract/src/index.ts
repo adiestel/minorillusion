@@ -1046,6 +1046,41 @@ export const promptAgentResultSchema = z.discriminatedUnion("ok", [
 ]);
 export type PromptAgentResult = z.infer<typeof promptAgentResultSchema>;
 
+// ===========================================================================
+// Join ritual + ship (M7) — session-end summary delivery + player log history.
+//
+// Players own a persistent history of session logs/summaries (DECISIONS D9). At
+// session end the GM delivers a chronicle (typically the M6 summary) to the
+// players; the server persists one per recipient and notifies them, and a player
+// can fetch their history. (QR/hearth join + onboarding are client conventions —
+// the join URL carries `?code=NNNNNN` — and need no wire shape.)
+// ===========================================================================
+
+/** A chronicle the player keeps — a delivered session summary/log line. */
+export const playerLogSchema = z.object({
+  id: z.string().uuid(),
+  circleId: z.string().uuid(),
+  playerId: z.string().uuid(),
+  title: z.string().max(120).optional(),
+  text: z.string().max(20_000),
+  createdAt: z.string().datetime(),
+});
+export type PlayerLog = z.infer<typeof playerLogSchema>;
+
+/** GM → server: deliver a chronicle to the target's players (persist one each). */
+export const deliverLogRequestSchema = z.object({
+  title: z.string().max(120).optional(),
+  text: z.string().min(1).max(20_000),
+  target: targetSchema,
+});
+export type DeliverLogRequest = z.infer<typeof deliverLogRequestSchema>;
+
+export const playerLogsSchema = z.object({
+  playerId: z.string().uuid(),
+  logs: z.array(playerLogSchema),
+});
+export type PlayerLogs = z.infer<typeof playerLogsSchema>;
+
 // ---------------------------------------------------------------------------
 // Socket.IO event maps (typed on both ends)
 // ---------------------------------------------------------------------------
@@ -1084,6 +1119,8 @@ export interface ServerToClientEvents {
   "agents:list": (list: AgentsList) => void;
   /** Server tells players whether the room is being recorded (D10 disclosure). */
   "capture:state": (info: { recording: boolean }) => void;
+  /** Server delivers a chronicle (session summary/log) to a player (M7). */
+  "log:receive": (log: PlayerLog) => void;
 }
 
 export interface ClientToServerEvents {
@@ -1223,6 +1260,13 @@ export interface ClientToServerEvents {
     req: PromptAgentRequest,
     ack: (result: PromptAgentResult) => void,
   ) => void;
+  /** GM delivers a chronicle (session summary/log) to the target's players (M7). */
+  "log:deliver": (
+    req: DeliverLogRequest,
+    ack: (result: { ok: boolean; deliveredTo: number }) => void,
+  ) => void;
+  /** Player fetches its own persisted chronicle history. */
+  "player:logs": (ack: (logs: PlayerLogs) => void) => void;
 }
 
 export const DEFAULT_SERVER_PORT = 3001;

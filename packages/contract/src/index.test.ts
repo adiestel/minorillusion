@@ -18,6 +18,8 @@ import {
   messageEffectSchema,
   presenceUpdateSchema,
   agentSchema,
+  deliverLogRequestSchema,
+  playerLogSchema,
   promptAgentRequestSchema,
   proficiencyForLevel,
   rollRequestSchema,
@@ -557,6 +559,25 @@ describe("intelligence layer (M6)", () => {
     // default style applies when omitted.
     const parsed = summarizeRequestSchema.parse({});
     expect(parsed.style).toBe("recap");
+  });
+
+  it("validates a player log + a deliver-log request (M7)", () => {
+    const log = {
+      id: crypto.randomUUID(),
+      circleId: crypto.randomUUID(),
+      playerId: crypto.randomUUID(),
+      title: "Session 1",
+      text: "The party cleared the crypt.",
+      createdAt: new Date().toISOString(),
+    };
+    expect(playerLogSchema.safeParse(log).success).toBe(true);
+    expect(
+      deliverLogRequestSchema.safeParse({ title: "Recap", text: "…", target: { kind: "broadcast" } }).success,
+    ).toBe(true);
+    // an empty body is rejected.
+    expect(
+      deliverLogRequestSchema.safeParse({ text: "", target: { kind: "broadcast" } }).success,
+    ).toBe(false);
   });
 
   it("validates an agent + a prompt request", () => {
