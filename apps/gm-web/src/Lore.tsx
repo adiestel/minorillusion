@@ -33,6 +33,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   Agent,
+  DeliverLogRequest,
   Player,
   PromptAgentRequest,
   PromptAgentResult,
@@ -74,7 +75,7 @@ export function Lore({ players, transcript, agents }: LoreProps) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: space(6) }}>
       <CaptureCard transcript={transcript} />
-      <SummaryCard transcript={transcript} />
+      <SummaryCard transcript={transcript} players={players} />
       <AgentsCard players={players} agents={agents} />
     </div>
   );
@@ -505,7 +506,7 @@ function SourceTag({ source }: { source: TranscriptEntry["source"] }) {
 // 2. Summary
 // ===========================================================================
 
-function SummaryCard({ transcript }: { transcript: TranscriptState | null }) {
+function SummaryCard({ transcript, players }: { transcript: TranscriptState | null; players: Player[] }) {
   const [style, setStyle] = usePersistentState<SummaryStyle>("mi.gm.lore.summaryStyle", "recap");
   // Source: the whole session, or a checked subset of lines.
   const [scope, setScope] = useState<"all" | "selection">("all");
@@ -514,6 +515,20 @@ function SummaryCard({ transcript }: { transcript: TranscriptState | null }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [summaries, setSummaries] = useState<Summary[]>([]);
+
+  // Deliver-as-chronicle: the text staged in the deliver form. "Send to players"
+  // on a summary (or the manual button) primes this; the panel scrolls/focuses it.
+  // A monotonically-bumped key forces the form to re-seed from a freshly picked
+  // summary even if its text matches what's already staged.
+  const [draft, setDraft] = useState<{ title: string; text: string; seed: number }>({
+    title: "",
+    text: "",
+    seed: 0,
+  });
+
+  function stageForDelivery(text: string, title: string) {
+    setDraft((prev) => ({ title, text, seed: prev.seed + 1 }));
+  }
 
   const entries = transcript?.entries ?? [];
   // Newest-first for the picker, mirroring the transcript view.
@@ -631,14 +646,27 @@ function SummaryCard({ transcript }: { transcript: TranscriptState | null }) {
         {error && <span style={{ color: DANGER_RED, fontSize: "0.82rem" }}>{error}</span>}
       </div>
 
-      {/* Recent summaries — newest first. */}
+      {/* Recent summaries — newest first. Each can be sent to players as a chronicle. */}
       {summaries.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: space(3), marginTop: space(4) }}>
           {summaries.map((s) => (
-            <SummaryBlock key={s.id} summary={s} />
+            <SummaryBlock
+              key={s.id}
+              summary={s}
+              onSend={() => stageForDelivery(s.text, `Session ${summaryStyleLabel(s.style)}`)}
+            />
           ))}
         </div>
       )}
+
+      {/* Deliver a chronicle — the session-end hand-off. Pre-fills from a summary's
+          "Send to players", or the GM can type a free chronicle. */}
+      <DeliverChronicle
+        players={players}
+        seed={draft.seed}
+        seedTitle={draft.title}
+        seedText={draft.text}
+      />
     </section>
   );
 }
@@ -647,7 +675,7 @@ function SummaryCard({ transcript }: { transcript: TranscriptState | null }) {
 // SummaryBlock — one returned summary
 // ---------------------------------------------------------------------------
 
-function SummaryBlock({ summary }: { summary: Summary }) {
+function SummaryBlock({ summary, onSend }: { summary: Summary; onSend: () => void }) {
   return (
     <div
       style={{
@@ -661,13 +689,183 @@ function SummaryBlock({ summary }: { summary: Summary }) {
         <span style={{ fontSize: "0.7rem", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: palette.ember }}>
           {summaryStyleLabel(summary.style)}
         </span>
-        <span style={{ fontSize: "0.72rem", color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>
-          {formatTime(summary.createdAt)}
+        <span style={{ display: "flex", alignItems: "center", gap: space(2), flexShrink: 0 }}>
+          <button style={miniButtonStyle} onClick={onSend} title="Stage this summary to deliver to players">
+            Send to players
+          </button>
+          <span style={{ fontSize: "0.72rem", color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>
+            {formatTime(summary.createdAt)}
+          </span>
         </span>
       </div>
       <p style={{ margin: 0, fontSize: "0.9rem", color: "var(--text)", whiteSpace: "pre-wrap", lineHeight: 1.5 }}>
         {summary.text}
       </p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// DeliverChronicle — the session-end hand-off. Sends a chronicle (a summary or
+// free text) + optional title to a target (everyone / specific players) via
+// `log:deliver`; the server persists one per recipient. Shows "delivered to N".
+// Seeded by a summary's "Send to players": a bumped `seed` re-applies the source.
+// ---------------------------------------------------------------------------
+
+function DeliverChronicle({
+  players,
+  seed,
+  seedTitle,
+  seedText,
+}: {
+  players: Player[];
+  seed: number;
+  seedTitle: string;
+  seedText: string;
+}) {
+  const [title, setTitle] = useState(seedTitle);
+  const [text, setText] = useState(seedText);
+  const textRef = useRef<HTMLTextAreaElement>(null);
+
+  // Target — broadcast or specific players (mirrors the prompt form / Soundboard).
+  const [targetMode, setTargetMode] = usePersistentState<"broadcast" | "players">("mi.gm.lore.deliverTargetMode", "broadcast");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{ deliveredTo: number } | null>(null);
+
+  // Re-seed from a freshly picked summary (seed bumps even if text is identical),
+  // then bring the staged text into view + focus so the GM sees what they'll send.
+  useEffect(() => {
+    if (seed === 0) return;
+    setTitle(seedTitle);
+    setText(seedText);
+    setError(null);
+    setResult(null);
+    const el = textRef.current;
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      el.focus();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed]);
+
+  const connectedPlayers = players.filter((p) => p.connected);
+  const targetReady = targetMode === "broadcast" || selectedIds.size > 0;
+  const canDeliver = !busy && text.trim().length > 0 && targetReady;
+
+  function togglePlayer(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function handleDeliver() {
+    if (!canDeliver) return;
+    setError(null);
+    setResult(null);
+    setBusy(true);
+
+    const trimmedTitle = title.trim();
+    const req: DeliverLogRequest = {
+      text: text.trim().slice(0, 20_000),
+      target:
+        targetMode === "broadcast"
+          ? { kind: "broadcast" }
+          : { kind: "players", playerIds: Array.from(selectedIds) },
+      ...(trimmedTitle ? { title: trimmedTitle.slice(0, 120) } : {}),
+    };
+
+    socket.emit("log:deliver", req, (res) => {
+      setBusy(false);
+      if (res.ok) {
+        setResult({ deliveredTo: res.deliveredTo });
+      } else {
+        setError("Could not deliver the chronicle.");
+      }
+    });
+  }
+
+  return (
+    <div style={formWrapStyle}>
+      <span style={subHeadingStyle}>Deliver chronicle</span>
+      <p style={{ ...hintStyle, marginTop: space(2) }}>
+        Hand the players their session chronicle — they keep it in their log. Send a
+        summary above with “Send to players”, or write one here.
+      </p>
+
+      <label style={{ ...labelStyle, marginTop: space(3) }}>Title (optional)</label>
+      <input
+        type="text"
+        value={title}
+        maxLength={120}
+        placeholder="e.g. The Sealed Door — Session 3"
+        onChange={(e) => {
+          setTitle(e.target.value);
+          if (error) setError(null);
+        }}
+        style={{ ...textInputStyle, marginTop: space(1) }}
+      />
+
+      <label style={{ ...labelStyle, marginTop: space(3) }}>Chronicle</label>
+      <textarea
+        ref={textRef}
+        value={text}
+        maxLength={20_000}
+        placeholder="The session's tale to hand your players…"
+        onChange={(e) => {
+          setText(e.target.value);
+          if (error) setError(null);
+          if (result) setResult(null);
+        }}
+        rows={4}
+        style={textareaStyle}
+      />
+
+      {/* Target */}
+      <label style={{ ...labelStyle, marginTop: space(3) }}>Send to</label>
+      <div style={{ display: "flex", gap: space(3), marginTop: space(1) }}>
+        <SmallToggle active={targetMode === "broadcast"} onClick={() => setTargetMode("broadcast")}>
+          Everyone
+        </SmallToggle>
+        <SmallToggle active={targetMode === "players"} onClick={() => setTargetMode("players")}>
+          Specific players
+        </SmallToggle>
+      </div>
+      {targetMode === "players" && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: space(2), marginTop: space(2) }}>
+          {connectedPlayers.length === 0 ? (
+            <span style={{ fontSize: "0.85rem", color: "var(--text-dim)" }}>No connected players.</span>
+          ) : (
+            connectedPlayers.map((p) => (
+              <PlayerChip
+                key={p.id}
+                player={p}
+                selected={selectedIds.has(p.id)}
+                onClick={() => togglePlayer(p.id)}
+              />
+            ))
+          )}
+        </div>
+      )}
+
+      <div style={{ display: "flex", alignItems: "center", gap: space(3), marginTop: space(4) }}>
+        <button onClick={handleDeliver} disabled={!canDeliver} style={primaryButtonStyle(!canDeliver)}>
+          {busy ? "Delivering…" : "Deliver to players"}
+        </button>
+        {result && (
+          <span style={{ fontSize: "0.82rem", color: result.deliveredTo > 0 ? palette.ember : "var(--text-dim)" }}>
+            {result.deliveredTo > 0
+              ? `delivered to ${result.deliveredTo} ${result.deliveredTo === 1 ? "player" : "players"}`
+              : "reached 0 players"}
+          </span>
+        )}
+        {error && <span style={{ color: DANGER_RED, fontSize: "0.82rem" }}>{error}</span>}
+      </div>
     </div>
   );
 }

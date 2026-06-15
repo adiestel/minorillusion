@@ -41,6 +41,7 @@ import { Party } from "./Party";
 import { Lore } from "./Lore";
 import { WhisperVoices } from "./WhisperVoices";
 import { MasterVolume } from "./MasterVolume";
+import { Hearth } from "./Hearth";
 import { usePersistentState } from "./usePersistentState";
 
 // ---------------------------------------------------------------------------
@@ -360,6 +361,10 @@ function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
   const [tab, setTab] = usePersistentState<Tab>("mi.gm.tab", "effects");
   const connected = players.filter((p) => p.connected).length;
 
+  // Hearth — a full-screen join display (fire + join code + QR) shown over the
+  // console as a table centerpiece. Its own overlay state; leaves the tabs alone.
+  const [hearthOpen, setHearthOpen] = useState(false);
+
   // Inbox state — App owns the live message list + the channel:message listener
   // (the Channel panel only renders + replies). Newest-first; capped.
   const [messages, setMessages] = useState<ChannelMessage[]>([]);
@@ -481,10 +486,18 @@ function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
             {circle.name ? ` · ${circle.name}` : ""}
           </span>
         </div>
-        <button style={leaveButtonStyle} onClick={onLeave}>
-          Leave
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: space(2), flexShrink: 0 }}>
+          <button style={hearthButtonStyle} onClick={() => setHearthOpen(true)}>
+            Hearth
+          </button>
+          <button style={leaveButtonStyle} onClick={onLeave}>
+            Leave
+          </button>
+        </div>
       </div>
+
+      {/* Hearth — full-screen join centerpiece, over everything when open. */}
+      {hearthOpen && <Hearth code={circle.code} onExit={() => setHearthOpen(false)} />}
 
       {/* Two columns: control tabs on the left, the live Stage on the right —
           so effects show up in the player previews as the GM fires them. Wraps
@@ -734,5 +747,18 @@ const leaveButtonStyle: React.CSSProperties = {
   fontSize: "0.85rem",
   cursor: "pointer",
   transition: "color 0.15s, border-color 0.15s",
+  alignSelf: "flex-start",
+};
+
+const hearthButtonStyle: React.CSSProperties = {
+  padding: `${space(2)} ${space(4)}`,
+  background: "transparent",
+  color: palette.ember,
+  border: `1px solid ${palette.emberDim}`,
+  borderRadius: radius.md,
+  fontWeight: 700,
+  fontSize: "0.85rem",
+  cursor: "pointer",
+  transition: "color 0.15s, border-color 0.15s, background 0.15s",
   alignSelf: "flex-start",
 };

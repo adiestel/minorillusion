@@ -12,6 +12,7 @@
  *   • haptics — vibration (web navigator.vibrate / native @capacitor/haptics).
  *   • audio   — bundled cue + data: URL playback, with iOS unlock priming.
  *   • mic     — player-initiated PTT capture (web getUserMedia + MediaRecorder).
+ *   • join    — join-ritual transport seam (QR/code now; native BLE/NFC later).
  */
 
 export type { HapticsCapability } from "./haptics";
@@ -22,3 +23,6 @@ export { audio } from "./audio";
 
 export type { MicCapability } from "./mic";
 export { mic } from "./mic";
+
+export type { JoinTransport } from "./join";
+export { join } from "./join";

@@ -134,6 +134,12 @@ export function Consent({ onAccept, onDecline, busy = false }: ConsentProps) {
             <span style={emphasisStyle}>record and transcribe the room&rsquo;s audio &mdash; including your voice &mdash; for the session log.</span>{" "}
             You&rsquo;ll see a recording indicator whenever it&rsquo;s active.
           </p>
+          <p>
+            Some effects briefly{" "}
+            <span style={emphasisStyle}>flash light on your screen.</span>{" "}
+            They&rsquo;re kept gentle and spaced out, but if you&rsquo;re sensitive to
+            flashing lights, keep your phone at a comfortable distance.
+          </p>
           <p>Leaving is one tap, any time.</p>
         </div>
 

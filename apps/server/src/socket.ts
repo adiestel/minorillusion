@@ -4,6 +4,7 @@ import { Server, type Socket } from "socket.io";
 import {
   addEntryRequestSchema,
   createCircleRequestSchema,
+  deliverLogRequestSchema,
   editEntryRequestSchema,
   importCharacterRequestSchema,
   joinRequestSchema,
@@ -46,6 +47,7 @@ import { CircleService } from "./circles.js";
 import { CharacterService } from "./characters.js";
 import { AgentService, agentSystemPrompt } from "./agents.js";
 import { SummaryService } from "./summaries.js";
+import { PlayerLogService } from "./playerLogs.js";
 import {
   addEntry,
   deleteEntry,
@@ -353,11 +355,13 @@ export interface SocketServerDeps {
   agents: AgentService;
   /** The M6 intelligence layer: persisted, LLM-written session summaries. */
   summaries: SummaryService;
+  /** The M7 join-ritual + ship layer: persisted per-player chronicle history. */
+  playerLogs: PlayerLogService;
 }
 
 export function createSocketServer(
   app: FastifyInstance,
-  { service, characters, agents, summaries }: SocketServerDeps,
+  { service, characters, agents, summaries, playerLogs }: SocketServerDeps,
 ): AppServer {
   const io: AppServer = new Server(app.server, {
     cors: { origin: DEV_ORIGINS },
@@ -1852,6 +1856,78 @@ export function createSocketServer(
         reply,
         deliveredTo: reached.length,
       });
+    });
+
+    // =====================================================================
+    // M7 — the join-ritual + ship layer: per-player session-log delivery +
+    // history (D9 — players own a persistent history of session logs). The
+    // GM delivers a chronicle (typically the M6 summary) to a target; the
+    // server persists one row per recipient and notifies them, and a player
+    // can fetch their own history.
+    // =====================================================================
+
+    // -- log:deliver (GM) -> persist a chronicle per recipient + notify them. --
+    //    GM-only (a player/unbound socket is rejected, like the effect handlers).
+    //    Resolves the request's target to the PRESENT players, and for each:
+    //    persists a PlayerLog (the same title/text) and emits log:receive (the
+    //    stored log) to that player's socket. Offline-but-in-target players are
+    //    NOT persisted/notified — delivery is to who is present (kept simple, as
+    //    the M3/M6 live-delivery handlers are); deliveredTo counts who received.
+    socket.on("log:deliver", async (req, ack) => {
+      const parsed = deliverLogRequestSchema.safeParse(req);
+      if (!parsed.success) {
+        ack({ ok: false, deliveredTo: 0 });
+        return;
+      }
+      const state = gmState();
+      if (!state) {
+        ack({ ok: false, deliveredTo: 0 });
+        return;
+      }
+      try {
+        const present = presentPlayerSockets(state.circleId);
+        const recipientIds = resolveTargets(parsed.data.target, [
+          ...present.keys(),
+        ]);
+        const chronicle = {
+          ...(parsed.data.title !== undefined ? { title: parsed.data.title } : {}),
+          text: parsed.data.text,
+        };
+        let deliveredTo = 0;
+        for (const playerId of recipientIds) {
+          const playerSocket = present.get(playerId);
+          if (!playerSocket) continue;
+          const log = await playerLogs.deliver(
+            state.circleId,
+            playerId,
+            chronicle,
+          );
+          playerSocket.emit("log:receive", log);
+          deliveredTo++;
+        }
+        ack({ ok: true, deliveredTo });
+      } catch (err) {
+        app.log.error({ err }, "log:deliver failed");
+        ack({ ok: false, deliveredTo: 0 });
+      }
+    });
+
+    // -- player:logs (player) -> ack the player's chronicle history, newest
+    //    first. PLAYER-only (a GM/unbound socket is rejected — the inverse of
+    //    the GM handlers, mirroring channel:text): a player owns their history.
+    socket.on("player:logs", async (ack) => {
+      const state = bindings.get(socket.id);
+      if (!state || state.playerId === undefined) {
+        ack({ playerId: "", logs: [] });
+        return;
+      }
+      try {
+        const logs = await playerLogs.listForPlayer(state.playerId);
+        ack({ playerId: state.playerId, logs });
+      } catch (err) {
+        app.log.error({ err }, "player:logs failed");
+        ack({ playerId: state.playerId, logs: [] });
+      }
     });
 
     // -- disconnect -> if a joined player, mark offline + broadcast. ----------

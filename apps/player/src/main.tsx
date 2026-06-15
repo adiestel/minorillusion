@@ -39,12 +39,35 @@ import { RollReveal } from "./RollReveal";
 import { Consent } from "./Consent";
 import { AudioUnlockModal } from "./AudioUnlockModal";
 import { PlayerInput } from "./PlayerInput";
+import { Onboarding } from "./Onboarding";
+import { LogAffordance, LogPanel, useChronicle } from "./LogHistory";
 
 import { socket } from "./socket";
 import { deviceId } from "./deviceId";
 import { haptics, audio } from "./capabilities/index";
 import { HAPTIC_PATTERNS } from "./hapticPatterns";
 import { saveSession, loadSession, clearSession } from "./session";
+import { hasOnboarded, markOnboarded } from "./onboardingFlag";
+
+// ---------------------------------------------------------------------------
+// QR / hearth join (M7): the GM's hearth shows a QR encoding the join URL with
+// `?code=NNNNNN`. A player who scans it lands here with the code in the query —
+// read it once at load so the JoinScreen can prefill, leaving only the name to
+// type. We do NOT auto-join (consent is still required, D10) — just prefill.
+// ---------------------------------------------------------------------------
+
+/** The 6-digit circle code from `?code=` in the URL, or "" if absent/invalid. */
+function readCodeFromUrl(): string {
+  try {
+    const raw = new URLSearchParams(window.location.search).get("code") ?? "";
+    const digits = raw.replace(/\D/g, "").slice(0, 6);
+    return /^\d{6}$/.test(digits) ? digits : "";
+  } catch {
+    return "";
+  }
+}
+
+const PREFILL_CODE = readCodeFromUrl();
 
 // ---------------------------------------------------------------------------
 // CSS-in-JS helpers (no build-time CSS needed; keeps the file self-contained)
@@ -258,11 +281,27 @@ interface JoinScreenProps {
   error?: string | null;
   /** True while a post-consent join is in flight. */
   busy?: boolean;
+  /**
+   * A 6-digit code to prefill (from `?code=` in the join URL — the QR / hearth
+   * path, M7). Seeds the code input so a player who scanned the GM's hearth lands
+   * ready to type just their name; "" means no prefill. Join is still gated on
+   * consent — this only saves the typing.
+   */
+  initialCode?: string;
 }
 
-function JoinScreen({ onProceed, error = null, busy = false }: JoinScreenProps) {
-  const [code, setCode] = useState("");
+function JoinScreen({ onProceed, error = null, busy = false, initialCode = "" }: JoinScreenProps) {
+  const [code, setCode] = useState(initialCode);
   const [name, setName] = useState("");
+  const nameInputRef = useRef<HTMLInputElement>(null);
+
+  // When the code is prefilled (scanned the hearth QR), the code is already done
+  // — drop focus straight onto the name so the player just types their name.
+  useEffect(() => {
+    if (initialCode.length > 0) nameInputRef.current?.focus();
+    // initialCode is a load-time constant; run once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const canSubmit = /^\d{6}$/.test(code) && name.trim().length > 0 && !busy;
 
@@ -374,6 +413,7 @@ function JoinScreen({ onProceed, error = null, busy = false }: JoinScreenProps) 
         />
 
         <input
+          ref={nameInputRef}
           aria-label="Your name"
           autoComplete="off"
           maxLength={40}
@@ -496,6 +536,23 @@ function App() {
   // True while the GM is capturing room audio (capture:state). Drives the
   // recording indicator (D10). Reset to false whenever we're not joined.
   const [recording, setRecording] = useState(false);
+  // First-run onboarding gesture-teach (M7): shown once per device, AFTER the
+  // first successful join, gated on the mi.onboarded localStorage flag. Set true
+  // by the join handlers when the flag is unset; cleared (and the flag marked)
+  // on dismiss.
+  const [showOnboarding, setShowOnboarding] = useState(false);
+
+  // The player's persistent chronicle (M7): delivered session summaries/logs.
+  // The hook owns the list, the open/closed panel state, the unread "a new
+  // chronicle arrived" cue, the lazy player:logs fetch, and the log:receive
+  // listener; we just mount the affordance + panel below while joined.
+  const joined = appState.screen === "joined";
+  const chronicle = useChronicle(joined);
+
+  const dismissOnboarding = useCallback(() => {
+    markOnboarded();
+    setShowOnboarding(false);
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Effect dispatcher — effect:deliver routed by effect.kind.
@@ -1106,6 +1163,11 @@ function App() {
               players: [result.player],
             },
           });
+          // First explicit join on this device → teach the input gestures once
+          // (M7). Only on this manual consent path, never the silent reconnect/
+          // rejoin path (a returning player shouldn't get the teach over a live
+          // session). Gated on the mi.onboarded flag; dismiss marks it seen.
+          if (!hasOnboarded()) setShowOnboarding(true);
         } else {
           // Surface the error back on the join screen.
           setJoinError(result.error);
@@ -1128,7 +1190,12 @@ function App() {
           busy={joining}
         />
       ) : (
-        <JoinScreen onProceed={handleProceed} error={joinError} busy={joining} />
+        <JoinScreen
+          onProceed={handleProceed}
+          error={joinError}
+          busy={joining}
+          initialCode={PREFILL_CODE}
+        />
       )}
 
       {/* Player input grammar (M3) — quill (text) + crystal ball (voice PTT),
@@ -1136,6 +1203,24 @@ function App() {
           z-indexes (idle catcher z20, sigils z25, compose/PTT z50), so it sits
           above the ember but below the parchment scrim (z60) + audio modal (z100). */}
       {appState.screen === "joined" && <PlayerInput />}
+
+      {/* Chronicle (M7) — the player's persistent log history. A subtle, diegetic
+          book glyph tucked bottom-left of the joined canvas (z30, above the input
+          idle-catcher z20 so it stays tappable, below every transient overlay);
+          it glows when an unread chronicle has arrived. Tapping opens the panel —
+          a liminal menu surface (z58: above the input surfaces + roll, below the
+          parchment scrim z60 + audio modal z100). Both render only while joined;
+          closing returns to the resting ember. */}
+      {appState.screen === "joined" && (
+        <LogAffordance unread={chronicle.unread} onOpen={chronicle.openPanel} />
+      )}
+      {appState.screen === "joined" && chronicle.open && (
+        <LogPanel
+          logs={chronicle.logs}
+          loading={chronicle.loading}
+          onClose={chronicle.closePanel}
+        />
+      )}
 
       {/* Recording indicator (D10) — shown while the GM captures room audio AND
           we're in the circle. Top-centre, safe-area aware, z 46 (above the ember
@@ -1177,6 +1262,15 @@ function App() {
           (latest-wins). */}
       {roll !== null && appState.screen === "joined" && (
         <RollReveal key={roll.id} result={roll.result} onDone={handleRollDone} />
+      )}
+
+      {/* First-run onboarding gesture-teach (M7) — shown once per device after the
+          first join, over the joined canvas. z52: above the ember + the input
+          surfaces, below the parchment scrim (z60) + audio modal (z100) so a
+          delivered message / sound-unlock still wins. Never blocks safety
+          affordances. Dismiss ("got it") marks mi.onboarded + clears it. */}
+      {showOnboarding && appState.screen === "joined" && (
+        <Onboarding onDismiss={dismissOnboarding} />
       )}
 
       {/* Parchment overlay — rendered above everything, portalled via fixed positioning */}

@@ -12,12 +12,14 @@
   "dependencies": {
     "@minorillusion/contract": "workspace:*",
     "@minorillusion/design-system": "workspace:*",
+    "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "socket.io-client": "^4.8.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",

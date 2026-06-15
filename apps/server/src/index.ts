@@ -8,6 +8,7 @@ import { CircleService, DrizzleCirclesStore } from "./circles.js";
 import { CharacterService, DrizzleCharactersStore } from "./characters.js";
 import { AgentService, DrizzleAgentsStore } from "./agents.js";
 import { SummaryService, DrizzleSummariesStore } from "./summaries.js";
+import { PlayerLogService, DrizzlePlayerLogStore } from "./playerLogs.js";
 import { runMigrations } from "./db/migrate.js";
 import { createSocketServer } from "./socket.js";
 
@@ -27,7 +28,14 @@ const service = new CircleService(new DrizzleCirclesStore());
 const characters = new CharacterService(new DrizzleCharactersStore());
 const agents = new AgentService(new DrizzleAgentsStore());
 const summaries = new SummaryService(new DrizzleSummariesStore());
-const io = createSocketServer(app, { service, characters, agents, summaries });
+const playerLogs = new PlayerLogService(new DrizzlePlayerLogStore());
+const io = createSocketServer(app, {
+  service,
+  characters,
+  agents,
+  summaries,
+  playerLogs,
+});
 
 app.addHook("onClose", async () => {
   await io.close();

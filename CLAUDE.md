@@ -5,8 +5,8 @@
 **This file is the always-loaded anchor. Before substantive work, read the relevant docs in `docs/` — they are the source of truth and survive context clearing.**
 
 ## Status
-- **Phase:** **M6 complete** — M0–M3 shipped (scaffold/presence, parchment tracer, effect engine + soundboard + consent, player voice/text plane); **M4** GL-island foundation + 3D dice (crystal ball deferred); **M5** the D&D layer (server-authoritative rolls, character sheets manual + DDB import, initiative tracker, GM Party + player dice reveal); **M6** the intelligence layer (GM room capture → STT transcript, Claude summaries/log editing behind an adapter, LLM agents-as-actors, GM Lore tab + player recording disclosure). All shipped & tested. See `docs/ROADMAP.md`.
-- **Next action:** **M7** — join ritual + ship (QR/hearth + onboarding + session-end summary delivery + player log history + the pre-submission checklist; on-device BLE/NFC, OTA, store submission are user-gated). See `docs/M7-PLAN.md`.
+- **Phase:** **M7 complete — all M0–M7 software shipped & tested.** M0–M3 (scaffold/presence, parchment tracer, effect engine + soundboard + consent, player voice/text plane); M4 (GL foundation + 3D dice; crystal ball deferred); M5 (D&D layer — server rolls, sheets, initiative); M6 (intelligence layer — room transcript, Claude summaries, agents-as-actors); M7 (join ritual + ship — Hearth/QR, onboarding, session-end chronicles + player log history, the pre-submission audit). 218 unit tests + smoke-m2…m7 green. See `docs/ROADMAP.md`.
+- **Next action:** **ship — user-gated.** The remainder needs your hardware + accounts: native binaries (`cap sync` + signing), a physical-device pass, BLE/NFC + Sign in with Apple, the OTA pipeline, and the store listings/submission. Full hand-off: `docs/SHIP-CHECKLIST.md` Part C.
 - **Open user step:** physical-device pass (haptic feel + iOS audio unlock + mic/PTT recording-indicator & track-release) — verify the player on a real iPhone/Android.
 - **Build mode:** Claude implements, user reviews — working code, milestone by milestone.
 

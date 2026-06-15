@@ -145,8 +145,36 @@ export const summaries = pgTable("summaries", {
     .defaultNow(),
 });
 
+/**
+ * The M7 join-ritual + ship layer: a per-player chronicle — a session
+ * summary/log line the GM delivered to one player, who KEEPS it (D9: players own
+ * a persistent history of session logs). One row is persisted per recipient at
+ * delivery, so each player's history is independent. Mirrors `playerLogSchema` in
+ * `packages/contract`; `src/playerLogs.ts` maps rows → contract types (dates →
+ * ISO strings). Deleting a circle OR the recipient player cascades its logs.
+ */
+export const playerLogs = pgTable("player_logs", {
+  id: uuid("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  circleId: uuid("circle_id")
+    .notNull()
+    .references(() => circles.id, { onDelete: "cascade" }),
+  /** The recipient: the player who owns this chronicle in their history. */
+  playerId: uuid("player_id")
+    .notNull()
+    .references(() => players.id, { onDelete: "cascade" }),
+  /** An optional short heading for the chronicle; null = untitled. */
+  title: text("title"),
+  text: text("text").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
 export type CircleRow = typeof circles.$inferSelect;
 export type PlayerRow = typeof players.$inferSelect;
 export type CharacterRow = typeof characters.$inferSelect;
 export type AgentRow = typeof agents.$inferSelect;
 export type SummaryRow = typeof summaries.$inferSelect;
+export type PlayerLogRow = typeof playerLogs.$inferSelect;
