@@ -71,5 +71,3 @@ recorded + transcribed → disclosed at consent + a visible recording indicator.
 ## Open follow-ups (not blocking M3)
 - **Physical-device pass** (long-standing): verify mic/PTT on a real iPhone/Android — the recording indicator, the OS mic indicator going dark on release, and getUserMedia in the Capacitor WebView. The browser/PWA path is verified.
 - **Live STT** is socket-smoke-skippable; exercise once with `SMOKE_STT=1 SMOKE_STT_CLIP=/path/to/clip pnpm smoke:m3` against a real key to confirm Scribe's response shape end-to-end.
-</content>
-</invoke>
