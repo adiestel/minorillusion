@@ -21,6 +21,7 @@ import type {
 } from "@minorillusion/contract";
 import { palette, radius, space } from "@minorillusion/design-system";
 import { socket } from "./socket";
+import { usePersistentState } from "./usePersistentState";
 
 const STORE_KEY = "mi.gm.whisper.phrases"; // the looping list (back-compat key)
 const PARK_KEY = "mi.gm.whisper.parked"; // the storage (non-looping) list
@@ -75,12 +76,13 @@ export function WhisperVoices({ players }: { players: Player[] }) {
   const [loopPhrases, setLoopPhrases] = useState<string[]>(() => loadList(STORE_KEY));
   const [parkedPhrases, setParkedPhrases] = useState<string[]>(() => loadList(PARK_KEY));
   const [draft, setDraft] = useState("");
-  const [order, setOrder] = useState<"random" | "sequential">("random");
-  const [loop, setLoop] = useState(true);
-  const [bedVol, setBedVol] = useState(0.5);
-  const [voiceVol, setVoiceVol] = useState(0.9);
-  const [minSec, setMinSec] = useState(8);
-  const [maxSec, setMaxSec] = useState(20);
+  // Settings persist across reloads so the GM doesn't re-dial them each session.
+  const [order, setOrder] = usePersistentState<"random" | "sequential">("mi.gm.whisper.order", "random");
+  const [loop, setLoop] = usePersistentState("mi.gm.whisper.loop", true);
+  const [bedVol, setBedVol] = usePersistentState("mi.gm.whisper.bedVol", 0.5);
+  const [voiceVol, setVoiceVol] = usePersistentState("mi.gm.whisper.voiceVol", 0.9);
+  const [minSec, setMinSec] = usePersistentState("mi.gm.whisper.minSec", 8);
+  const [maxSec, setMaxSec] = usePersistentState("mi.gm.whisper.maxSec", 20);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
 
@@ -88,11 +90,11 @@ export function WhisperVoices({ players }: { players: Player[] }) {
   // colours both one-off speech (Play now / a phrase's ▶) and the whisperscape's
   // looping phrases. Independent toggles — e.g. echo + distortion without the bed.
   // The bed only wraps ONE-OFF speech; the whisperscape already rides its own bed.
-  const [fxBed, setFxBed] = useState(true);
-  const [fxEcho, setFxEcho] = useState(true);
-  const [echoAmt, setEchoAmt] = useState(0.35); // moderate — keeps the voice legible
-  const [fxDistortion, setFxDistortion] = useState(true);
-  const [fxPan, setFxPan] = useState(true);
+  const [fxBed, setFxBed] = usePersistentState("mi.gm.whisper.fxBed", true);
+  const [fxEcho, setFxEcho] = usePersistentState("mi.gm.whisper.fxEcho", true);
+  const [echoAmt, setEchoAmt] = usePersistentState("mi.gm.whisper.echoAmt", 0.35); // moderate — keeps the voice legible
+  const [fxDistortion, setFxDistortion] = usePersistentState("mi.gm.whisper.fxDistortion", true);
+  const [fxPan, setFxPan] = usePersistentState("mi.gm.whisper.fxPan", true);
   // Which one-off speech is in flight ("draft" or `phrase:<i>`), to show feedback.
   const [playId, setPlayId] = useState<string | null>(null);
 
@@ -104,8 +106,9 @@ export function WhisperVoices({ players }: { players: Player[] }) {
   const [drag, setDrag] = useState<DragRef | null>(null);
   const [over, setOver] = useState<DragRef | null>(null);
 
-  // Target — like the storm, the whole whisperscape can aim at one player.
-  const [targetMode, setTargetMode] = useState<"broadcast" | "players">("broadcast");
+  // Target — like the storm, the whole whisperscape can aim at one player. The
+  // mode persists; the specific player picks don't (their ids change per session).
+  const [targetMode, setTargetMode] = usePersistentState<"broadcast" | "players">("mi.gm.whisper.targetMode", "broadcast");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {

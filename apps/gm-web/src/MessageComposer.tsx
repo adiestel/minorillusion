@@ -13,6 +13,7 @@ import type {
 } from "@minorillusion/contract";
 import { palette, radius, space } from "@minorillusion/design-system";
 import { socket } from "./socket";
+import { usePersistentState } from "./usePersistentState";
 
 // ---------------------------------------------------------------------------
 // Types for the sent-log
@@ -40,10 +41,12 @@ interface MessageComposerProps {
 export function MessageComposer({ players }: MessageComposerProps) {
   // --- Composer state ---
   const [body, setBody] = useState("");
-  const [targetMode, setTargetMode] = useState<"broadcast" | "players">("broadcast");
+  // Target mode + delivery mode + auto-dismiss persist across reloads; the body
+  // text and the specific player picks stay ephemeral.
+  const [targetMode, setTargetMode] = usePersistentState<"broadcast" | "players">("mi.gm.msg.targetMode", "broadcast");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [mode, setMode] = useState<MessageMode>("acknowledge");
-  const [autoDismissSecs, setAutoDismissSecs] = useState(5);
+  const [mode, setMode] = usePersistentState<MessageMode>("mi.gm.msg.mode", "acknowledge");
+  const [autoDismissSecs, setAutoDismissSecs] = usePersistentState("mi.gm.msg.autoDismissSec", 5);
 
   // --- Send state ---
   const [sending, setSending] = useState(false);

@@ -26,6 +26,7 @@ import type {
 } from "@minorillusion/contract";
 import { palette, radius, space } from "@minorillusion/design-system";
 import { socket } from "./socket";
+import { usePersistentState } from "./usePersistentState";
 
 // ---------------------------------------------------------------------------
 // One-tap button definitions
@@ -95,18 +96,26 @@ interface SoundboardProps {
 
 export function Soundboard({ players }: SoundboardProps) {
   // --- Target selector state (mirrors MessageComposer) ---
-  const [targetMode, setTargetMode] = useState<"broadcast" | "players">("broadcast");
+  // Mode persists across reloads; the specific player picks stay ephemeral.
+  const [targetMode, setTargetMode] = usePersistentState<"broadcast" | "players">("mi.gm.sound.targetMode", "broadcast");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // --- Fade interval for looping weather beds (seconds) ---
-  const [fadeSeconds, setFadeSeconds] = useState(5);
+  const [fadeSeconds, setFadeSeconds] = usePersistentState("mi.gm.sound.fadeSec", 5);
 
   // --- Master effects volume (live; broadcast to present players) ---
-  const [effectsVol, setEffectsVol] = useState(1);
+  const [effectsVol, setEffectsVol] = usePersistentState("mi.gm.sound.effectsVol", 1);
   function changeEffectsVol(v: number) {
     setEffectsVol(v);
     socket.emit("mixer:set", { gain: v });
   }
+
+  // Re-apply the saved master volume to present players on (re)mount, so a GM
+  // reload restores the level rather than silently snapping back to full.
+  useEffect(() => {
+    socket.emit("mixer:set", { gain: effectsVol });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // --- Transient status ---
   const [status, setStatus] = useState<Status>(null);

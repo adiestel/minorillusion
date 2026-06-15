@@ -29,6 +29,7 @@ import { ActiveEffects } from "./ActiveEffects";
 import { Stage } from "./Stage";
 import { PlayersPanel } from "./PlayersPanel";
 import { WhisperVoices } from "./WhisperVoices";
+import { usePersistentState } from "./usePersistentState";
 
 // ---------------------------------------------------------------------------
 // Session-restore helpers
@@ -338,7 +339,7 @@ interface CirclePanelProps {
 type Tab = "effects" | "messages" | "players";
 
 function CirclePanel({ circle, players, onLeave }: CirclePanelProps) {
-  const [tab, setTab] = useState<Tab>("effects");
+  const [tab, setTab] = usePersistentState<Tab>("mi.gm.tab", "effects");
   const connected = players.filter((p) => p.connected).length;
 
   return (
