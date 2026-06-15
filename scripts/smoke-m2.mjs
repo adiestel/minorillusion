@@ -400,6 +400,30 @@ try {
   await waitUntil(() => !latestActive.some((e) => e.id === onceStart.effectId), 12000);
   ok("non-looping whisperscape auto-stopped after its last phrase (no manual stop)");
 
+  // BED OFF: turning off the bed starts a whisperscape with NO continuous loop —
+  // only the spoken phrases fire. The dissonant bed must never be delivered.
+  const noBedSeen = [];
+  const noBedCollector = (e) => noBedSeen.push(e);
+  player.on("effect:deliver", noBedCollector);
+  const noBed = await gm.timeout(5000).emitWithAck("whisperscape:start", {
+    target: { kind: "players", playerIds: [playerId] },
+    phrases: ["silence"],
+    bed: false,
+    minGapMs: 2000,
+    maxGapMs: 2000,
+  });
+  check(noBed.ok === true, "bed-off whisperscape:start acked");
+  await waitUntil(() => latestActive.some((e) => e.id === noBed.effectId && e.label === "Whispers"), 4000);
+  ok("bed-off whisperscape shows active");
+  await new Promise((r) => setTimeout(r, 1500)); // a moment — no bed should arrive
+  player.off("effect:deliver", noBedCollector);
+  check(
+    !noBedSeen.some((e) => e.kind === "audio" && e.source.via === "cue" && e.source.cue === "whispers" && e.loop === true),
+    "bed-off whisperscape delivered NO dissonant bed loop",
+  );
+  await gm.timeout(5000).emitWithAck("effect:stop", { effectId: noBed.effectId });
+  ok("bed-off whisperscape stopped");
+
   // --- TTS (live ElevenLabs) — opt-in via SMOKE_TTS=1 ---------------------
   if (process.env.SMOKE_TTS === "1") {
     deliver = waitFor(player, "effect:deliver", (e) => e.kind === "audio" && e.source.via === "data", 15000);

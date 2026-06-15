@@ -525,6 +525,9 @@ export const whisperscapeRequestSchema = z.object({
   echoAmount: z.number().min(0).max(1).optional(),
   distortion: z.boolean().default(true),
   pan: z.boolean().default(true),
+  /** Play the looping dissonant bed as the ambience. Off → only the spoken
+   *  phrases fire, with no continuous bed (mirrors the GM's Whispers-bed toggle). */
+  bed: z.boolean().default(true),
   /** 0..1 level of the dissonant bed (default 0.5). */
   bedGain: z.number().min(0).max(1).optional(),
   /** 0..1 level of the spoken phrases (default 0.9). */

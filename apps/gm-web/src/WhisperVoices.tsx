@@ -250,7 +250,9 @@ export function WhisperVoices({ players }: { players: Player[] }) {
       phrases: loopPhrases,
       order,
       loop,
-      // The whisperscape rides its own bed, so only echo/distortion/pan apply.
+      // The Whispers-bed toggle drives the looping ambience here too (off → only
+      // the spoken phrases fire). Echo/distortion/pan colour the phrases.
+      bed: fxBed,
       echo: fxEcho,
       ...(fxEcho ? { echoAmount: echoAmt } : {}),
       distortion: fxDistortion,
@@ -495,8 +497,9 @@ export function WhisperVoices({ players }: { players: Player[] }) {
       </div>
 
       {/* Voice FX — colours every spoken line: Play now, a phrase's ▶, and the
-          whisperscape's looping phrases. The bed wraps one-off speech only (the
-          whisperscape already rides its own dissonant bed). */}
+          whisperscape's looping phrases. "Whispers bed" wraps one-off speech in
+          the dissonant bed AND drives the whisperscape's ambience — off → just
+          the spoken phrases, no bed. */}
       <label style={{ ...labelStyle, marginTop: space(4) }}>Voice FX</label>
       <div style={{ display: "flex", flexWrap: "wrap", gap: space(2), marginTop: space(2) }}>
         <ToggleButton active={fxBed} onClick={() => setFxBed((v) => !v)}>

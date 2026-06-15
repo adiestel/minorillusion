@@ -509,7 +509,8 @@ export function createSocketServer(
       minGap: number;
       maxGap: number;
       voice?: string;
-      bedId: string;
+      /** The bed effect id to end on stop — absent when the bed is off. */
+      bedId?: string;
     },
   ): void {
     let stopped = false;
@@ -592,6 +593,7 @@ export function createSocketServer(
     record.stopWhispers = () => {
       stopped = true;
       if (timer) clearTimeout(timer);
+      if (bedId === undefined) return; // no bed was started — nothing to end
       // End the bed on the present in-target players.
       const present = presentPlayerSockets(circleId);
       const recipientIds = resolveTargets(record.target, [...present.keys()]);
@@ -868,7 +870,8 @@ export function createSocketServer(
         return;
       }
 
-      const { target, phrases, order, loop, echo, echoAmount, distortion, pan } = parsed.data;
+      const { target, phrases, order, loop, echo, echoAmount, distortion, pan, bed: useBed } =
+        parsed.data;
       const bedGain = parsed.data.bedGain ?? 0.5;
       const voiceGain = parsed.data.voiceGain ?? 0.9;
       const minGap = parsed.data.minGapMs ?? 8000;
@@ -876,23 +879,28 @@ export function createSocketServer(
       const voice = parsed.data.voice;
 
       try {
-        // Deliver the dissonant bed (a whispers loop) to present in-target players.
         const present = presentPlayerSockets(state.circleId);
         const recipientIds = resolveTargets(target, [...present.keys()]);
-        const bed = await buildEffect({
-          kind: "audio",
-          source: { via: "cue", cue: "whispers" },
-          loop: true,
-          gain: bedGain,
-        });
-        let deliveredTo = 0;
-        for (const playerId of recipientIds) {
-          present.get(playerId)?.emit("effect:deliver", bed);
-          deliveredTo++;
+
+        // Deliver the dissonant bed (a whispers loop) to present in-target
+        // players — UNLESS the GM turned the bed off, in which case only the
+        // spoken phrases fire (no continuous ambience loop).
+        let bed: DeliveredEffect | undefined;
+        if (useBed) {
+          bed = await buildEffect({
+            kind: "audio",
+            source: { via: "cue", cue: "whispers" },
+            loop: true,
+            gain: bedGain,
+          });
+          for (const playerId of recipientIds) {
+            present.get(playerId)?.emit("effect:deliver", bed);
+          }
         }
+        const deliveredTo = recipientIds.length;
 
         // Register the sustained record (the GM Active panel shows "Whispers").
-        // The bed rides along so a (re)joining player resumes the ambience.
+        // The bed (if any) rides along so a (re)joining player resumes it.
         const recordId = randomUUID();
         active.registerRaw(state.circleId, recordId, "whisperscape", "Whispers", target, bed);
         const record = active.get(state.circleId, recordId);
@@ -909,7 +917,7 @@ export function createSocketServer(
             minGap,
             maxGap,
             voice,
-            bedId: bed.id,
+            ...(bed ? { bedId: bed.id } : {}),
           });
         }
         ack({ ok: true, effectId: recordId, deliveredTo });
